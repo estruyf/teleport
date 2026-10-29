@@ -7,7 +7,10 @@ import TeleportCore
 @MainActor
 final class AppModel: ObservableObject {
     @Published var config: TeleportConfig {
-        didSet { try? config.save() }
+        didSet {
+            try? config.save()
+            applyFlags()
+        }
     }
     @Published private(set) var host: HostController?
     @Published private(set) var viewer: ViewerController?
@@ -18,6 +21,7 @@ final class AppModel: ObservableObject {
     init() {
         config = TeleportConfig.loadOrCreate()
         identity = (try? DeviceIdentity.loadOrCreate()) ?? DeviceIdentity(privateKey: .init())
+        applyFlags()
         if let mode = config.mode { activate(mode) }
     }
 
@@ -26,6 +30,11 @@ final class AppModel: ObservableObject {
         shutdown()
         config.mode = mode
         activate(mode)
+    }
+
+    private func applyFlags() {
+        Sounds.enabled = config.soundsEnabled
+        viewer?.clipboardSyncEnabled = config.clipboardSyncEnabled
     }
 
     private func activate(_ mode: TeleportConfig.Mode) {
@@ -40,6 +49,7 @@ final class AppModel: ObservableObject {
             Task { await controller.start() }
         case .viewer:
             let controller = ViewerController(identity: identity, deviceName: config.deviceName)
+            controller.clipboardSyncEnabled = config.clipboardSyncEnabled
             controller.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
             viewer = controller
             NSApp.setActivationPolicy(.regular)
@@ -88,7 +98,7 @@ struct RootView: View {
                 }
             }
         }
-        .frame(minWidth: 720, minHeight: 540)
+        .frame(minWidth: 760, minHeight: 560)
         .sheet(isPresented: $showSettings) { SettingsSheet(app: app) }
     }
 
@@ -102,8 +112,8 @@ struct RootView: View {
                 Text("Viewer").tag(TeleportConfig.Mode.viewer)
             }
             .pickerStyle(.segmented)
-            .frame(width: 180)
-            .help("Host shares this Mac's apps. Viewer shows another Mac's apps.")
+            .frame(width: 170)
+            .help("Host shares this Mac's apps. Viewer uses another Mac's apps.")
             Button { showSettings = true } label: { Image(systemName: "gearshape") }.help("Settings")
         }
         .padding(.horizontal, 20)
@@ -121,20 +131,28 @@ struct SettingsSheet: View {
     @Local private var vdEnabled = true
     @Local private var vdWidth = ""
     @Local private var vdHeight = ""
+    @Local private var clipboard = true
+    @Local private var sounds = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Settings").font(.title2.weight(.semibold))
             Form {
-                TextField("This Mac's name", text: $name)
-                Picker("This Mac is a", selection: Binding(get: { app.config.mode ?? .viewer }, set: { app.setMode($0) })) {
-                    Text("Host: shares its apps").tag(TeleportConfig.Mode.host)
-                    Text("Viewer: shows remote apps").tag(TeleportConfig.Mode.viewer)
+                Section("This Mac") {
+                    TextField("Name", text: $name)
+                    Picker("Role", selection: Binding(get: { app.config.mode ?? .viewer }, set: { app.setMode($0) })) {
+                        Text("Host: shares its apps").tag(TeleportConfig.Mode.host)
+                        Text("Viewer: uses another Mac's apps").tag(TeleportConfig.Mode.viewer)
+                    }
                 }
-                TextField("Port", text: $port)
+                Section("Between Macs") {
+                    Toggle("Share clipboard text", isOn: $clipboard)
+                    Toggle("Sounds when a portal opens or a Mac pairs", isOn: $sounds)
+                    TextField("Port", text: $port)
+                }
                 if app.config.mode == .host {
                     Section("Virtual display") {
-                        Toggle("Create a virtual display for a Mac without a screen", isOn: $vdEnabled)
+                        Toggle("Create a display for a Mac without a screen", isOn: $vdEnabled)
                         HStack {
                             TextField("Width", text: $vdWidth)
                             Text("×")
@@ -146,6 +164,7 @@ struct SettingsSheet: View {
                 }
                 Section("This Mac's key") {
                     Text(app.identity.publicKeyHex).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    Text("Files live in \(TeleportConfig.directory.path)").font(.caption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
@@ -157,13 +176,15 @@ struct SettingsSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 520)
+        .frame(width: 540)
         .onAppear {
             name = app.config.deviceName
             port = String(app.config.port)
             vdEnabled = app.config.virtualDisplay.enabled
             vdWidth = String(app.config.virtualDisplay.width)
             vdHeight = String(app.config.virtualDisplay.height)
+            clipboard = app.config.clipboardSyncEnabled
+            sounds = app.config.soundsEnabled
         }
     }
 
@@ -174,6 +195,8 @@ struct SettingsSheet: View {
         config.virtualDisplay.enabled = vdEnabled
         if let w = Int(vdWidth), w >= 800 { config.virtualDisplay.width = w }
         if let h = Int(vdHeight), h >= 600 { config.virtualDisplay.height = h }
+        config.clipboardSync = clipboard
+        config.sounds = sounds
         app.config = config
         app.host?.config = config
     }

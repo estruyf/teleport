@@ -24,6 +24,13 @@ public struct TeleportConfig: Codable {
     public var virtualDisplay: VirtualDisplayConfig
     /// Optional explicit path to `livekit-server`.
     public var livekitServerPath: String?
+    /// Share clipboard text with the other Mac. Nil means on.
+    public var clipboardSync: Bool?
+    /// Play a short sound when a portal opens or a Mac pairs. Nil means on.
+    public var sounds: Bool?
+
+    public var clipboardSyncEnabled: Bool { clipboardSync ?? true }
+    public var soundsEnabled: Bool { sounds ?? true }
 
     public struct VirtualDisplayConfig: Codable {
         public var enabled: Bool
@@ -67,7 +74,9 @@ public struct TeleportConfig: Codable {
             port: 7880,
             allowedApps: [],
             virtualDisplay: .init(enabled: true, width: 1920, height: 1200, hiDPI: true),
-            livekitServerPath: nil
+            livekitServerPath: nil,
+            clipboardSync: nil,
+            sounds: nil
         )
         try? config.save()
         return config

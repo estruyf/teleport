@@ -204,3 +204,19 @@ public enum FileDropKeys {
     public static let x = "x"
     public static let y = "y"
 }
+
+// MARK: - Clipboard
+
+public extension Topic {
+    /// Clipboard text, both directions. Data packets are capped at 15 KB; longer text is skipped.
+    static let clipboard = "clipboard"
+}
+
+public struct ClipboardMessage: Codable {
+    public var text: String
+    public init(text: String) { self.text = text }
+}
+
+public enum Discovery {
+    public static let serviceType = "_teleport._tcp"
+}

@@ -28,6 +28,12 @@ final class ViewerController: NSObject, ObservableObject {
     private var pendingTracks: [String: RemoteVideoTrack] = [:]
     private let dockTiles = DockTileManager()
     private let hostStore = JSONListStore<PairedHost>(filename: "hosts.json")
+    private let clipboard = ClipboardSync()
+    private var userDisconnecting = false
+    private var reconnectTask: Task<Void, Never>?
+    /// Windows that were open when the connection dropped; reopened after a reconnect.
+    private var reopenAfterReconnect: [WindowInfo] = []
+    var clipboardSyncEnabled = true
 
     var connected: Bool { if case .connected = state { true } else { false } }
 
@@ -37,6 +43,7 @@ final class ViewerController: NSObject, ObservableObject {
         super.init()
         hosts = hostStore.load()
         room.add(delegate: self)
+        clipboard.onChange = { [weak self] text in self?.sendClipboard(text) }
         dockTiles.onActivate = { [weak self] bundleID in
             self?.focusApp(bundleID)
         }
@@ -57,9 +64,10 @@ final class ViewerController: NSObject, ObservableObject {
             hosts.append(host)
             try? hostStore.save(hosts)
             notice = "Paired with \(host.name)."
+            Sounds.paired()
             await connect(host)
         } catch {
-            notice = "\(error)"
+            notice = Self.friendly(error, host: nil)
         }
     }
 
@@ -73,21 +81,33 @@ final class ViewerController: NSObject, ObservableObject {
 
     func connect(_ host: PairedHost) async {
         if connected { await disconnect() }
+        reconnectTask?.cancel()
+        userDisconnecting = false
         state = .connecting(host.name)
         notice = nil
         do {
-            let result = try await HostClient.token(for: host, identity: identity)
-            hostIdentity = Participant.Identity(from: result.hostIdentity)
-            try await room.connect(url: host.signalURL, token: result.token, connectOptions: ConnectOptions(autoSubscribe: true))
-            current = host
-            state = .connected(host.name)
+            try await join(host)
+            Sounds.connected()
             await refresh()
         } catch {
-            state = .failed("\(error)")
+            state = .failed(Self.friendly(error, host: host))
         }
     }
 
+    private func join(_ host: PairedHost) async throws {
+        let result = try await HostClient.token(for: host, identity: identity)
+        hostIdentity = Participant.Identity(from: result.hostIdentity)
+        try await room.connect(url: host.signalURL, token: result.token, connectOptions: ConnectOptions(autoSubscribe: true))
+        current = host
+        state = .connected(host.name)
+        if clipboardSyncEnabled { clipboard.start() }
+    }
+
     func disconnect() async {
+        userDisconnecting = true
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        clipboard.stop()
         for portal in portals.values { portal.close() }
         portals.removeAll()
         dockTiles.removeAll()
@@ -95,6 +115,77 @@ final class ViewerController: NSObject, ObservableObject {
         current = nil
         apps = []
         state = .idle
+    }
+
+    /// The host went away or the network dropped: keep trying for a couple of minutes.
+    private func scheduleReconnect(after error: LiveKitError?) {
+        guard let host = current, !userDisconnecting else { return }
+        reopenAfterReconnect = portals.values.map(\.info)
+        for portal in portals.values { portal.hostClosed() }
+        portals.removeAll()
+        dockTiles.removeAll()
+        clipboard.stop()
+        apps = []
+        state = .connecting(host.name)
+        notice = "Connection to \(host.name) lost. Reconnecting…"
+        Log.warn("disconnected from \(host.name): \(String(describing: error)); reconnecting")
+        reconnectTask?.cancel()
+        reconnectTask = Task { [weak self] in
+            let delays: [UInt64] = [2, 4, 8, 15, 30, 30, 30]
+            for delay in delays {
+                try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+                guard let self, !Task.isCancelled, !self.userDisconnecting else { return }
+                do {
+                    try await self.join(host)
+                    self.notice = nil
+                    await self.refresh()
+                    let toReopen = self.reopenAfterReconnect
+                    self.reopenAfterReconnect = []
+                    for window in toReopen where self.apps.contains(where: { $0.windows.contains(where: { $0.id == window.id }) }) {
+                        await self.open(window)
+                    }
+                    return
+                } catch {
+                    Log.warn("reconnect to \(host.name) failed: \(error)")
+                }
+            }
+            guard let self else { return }
+            self.current = nil
+            self.state = .failed("Could not reconnect to \(host.name). Is Teleport still running there?")
+        }
+    }
+
+    /// Errors in plain words.
+    static func friendly(_ error: Error, host: PairedHost?) -> String {
+        let name = host?.name ?? "the host"
+        if let pairing = error as? PairingError {
+            switch pairing {
+            case .notTrusted: return "\(name) no longer knows this Mac. Pair again."
+            case let .unreachable(detail):
+                if detail.lowercased().contains("timed out") || detail.lowercased().contains("could not connect") || detail.lowercased().contains("connection refused") {
+                    return "Can't reach \(name). Is Teleport running and hosting there?"
+                }
+                return "Can't reach \(name): \(detail)"
+            default: return "\(pairing)"
+            }
+        }
+        if let livekit = error as? LiveKitError {
+            switch livekit.type {
+            case .network, .timedOut: return "Can't reach \(name)'s streaming server. Is it hosting?"
+            case .serverPingTimedOut: return "Lost contact with \(name)."
+            default: break
+            }
+            return "Streaming failed with \(name): \(livekit.message ?? "\(livekit.type)")"
+        }
+        if (error as? URLError) != nil { return "Can't reach \(name). Check the address and that Teleport runs there." }
+        return "\(error)"
+    }
+
+    // MARK: - Clipboard
+
+    private func sendClipboard(_ text: String) {
+        guard connected, clipboardSyncEnabled, let data = try? JSONEncoder().encode(ClipboardMessage(text: text)) else { return }
+        Task { try? await room.localParticipant.publish(data: data, options: DataPublishOptions(topic: Topic.clipboard, reliable: true)) }
     }
 
     func refresh() async {
@@ -126,11 +217,12 @@ final class ViewerController: NSObject, ObservableObject {
                 portal.attach(track: track)
             }
             portal.showWindow(nil)
+            Sounds.portalOpened()
             if let icon = await loadIcon(for: window.bundleID) {
                 dockTiles.ensureTile(bundleID: window.bundleID, appName: window.app, icon: icon)
             }
         } catch {
-            notice = "Open failed: \(error)"
+            notice = "Could not open \(window.app): \(Self.friendly(error, host: current))"
         }
     }
 
@@ -150,7 +242,7 @@ final class ViewerController: NSObject, ObservableObject {
             }
             await refresh()
         } catch {
-            notice = "Launch failed: \(error)"
+            notice = "Could not launch \(app.name): \(Self.friendly(error, host: current))"
         }
     }
 
@@ -263,14 +355,18 @@ extension ViewerController: RoomDelegate {
         Task { @MainActor in self.trackLeft(name: name) }
     }
 
+    nonisolated func room(_: Room, participant _: RemoteParticipant?, didReceiveData data: Data, forTopic topic: String, encryptionType _: EncryptionType) {
+        guard topic == Topic.clipboard else { return }
+        Task { @MainActor in
+            guard self.clipboardSyncEnabled, let message = try? JSONDecoder().decode(ClipboardMessage.self, from: data) else { return }
+            self.clipboard.apply(message.text)
+        }
+    }
+
     nonisolated func room(_: Room, didDisconnectWithError error: LiveKitError?) {
         Task { @MainActor in
-            for portal in self.portals.values { portal.hostClosed() }
-            self.portals.removeAll()
-            self.dockTiles.removeAll()
-            self.current = nil
-            self.apps = []
-            self.state = .failed(error.map { "Disconnected: \($0)" } ?? "Disconnected.")
+            if self.userDisconnecting { return }
+            self.scheduleReconnect(after: error)
         }
     }
 }

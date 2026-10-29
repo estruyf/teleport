@@ -43,6 +43,19 @@ final class PortalWindowController: NSWindowController, NSWindowDelegate {
         portalView.videoView.track = track
     }
 
+    /// Arrive like something materialising: fade in while the border flares, then settles.
+    override func showWindow(_ sender: Any?) {
+        guard let window else { return }
+        window.alphaValue = 0
+        super.showWindow(sender)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.35
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().alphaValue = 1
+        }
+        portalView.flareBorder()
+    }
+
     func hostClosed() {
         hostGone = true
         window?.title = "\(info.title) (ended)"
@@ -108,6 +121,26 @@ final class PortalView: NSView {
     required init?(coder _: NSCoder) { fatalError() }
 
     override var acceptsFirstResponder: Bool { true }
+
+    /// A brief violet glow on the border when the portal opens.
+    func flareBorder() {
+        guard let layer else { return }
+        let glow = CABasicAnimation(keyPath: "shadowOpacity")
+        glow.fromValue = 0.9
+        glow.toValue = 0
+        glow.duration = 1.2
+        layer.shadowColor = PortalWindowController.remoteColor.cgColor
+        layer.shadowRadius = 18
+        layer.shadowOpacity = 0
+        layer.masksToBounds = false
+        layer.add(glow, forKey: "flare")
+        let width = CABasicAnimation(keyPath: "borderWidth")
+        width.fromValue = 8
+        width.toValue = 3
+        width.duration = 0.6
+        width.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(width, forKey: "borderFlare")
+    }
 
     // MARK: - Files dropped on the window go to the host, which drops them into the real window.
 

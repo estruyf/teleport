@@ -5,6 +5,8 @@ import TeleportCore
 final class LiveKitServer {
     private var process: Process?
     private let config: TeleportConfig
+    /// Called off the main thread when livekit-server exits without being asked to.
+    var onUnexpectedExit: (() -> Void)?
 
     init(config: TeleportConfig) {
         self.config = config
@@ -44,8 +46,9 @@ final class LiveKitServer {
         let logHandle = try FileHandle(forWritingTo: logURL)
         process.standardOutput = logHandle
         process.standardError = logHandle
-        process.terminationHandler = { p in
+        process.terminationHandler = { [weak self] p in
             Log.error("livekit-server exited with status \(p.terminationStatus); see \(logURL.path)")
+            self?.onUnexpectedExit?()
         }
         try process.run()
         self.process = process

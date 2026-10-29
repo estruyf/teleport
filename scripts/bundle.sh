@@ -22,6 +22,36 @@ cp "$BIN/Teleport" "$BIN/TeleportDockTile" "$APP/Contents/MacOS/"
 # SwiftPM's LiveKit frameworks (xcframework slices) and resource bundles live beside the binary.
 for fw in "$BIN"/*.framework; do [ -d "$fw" ] && cp -R "$fw" "$APP/Contents/Frameworks/"; done
 for rb in "$BIN"/*.bundle; do [ -d "$rb" ] && cp -R "$rb" "$APP/Contents/MacOS/"; done
+# livekit-server: LiveKit ships macOS builds only through Homebrew. Take the bottle for this
+# arch, and the other arch's bottle when brew can fetch it, so the bundle runs on both kinds of Mac.
+LIVEKIT_VERSION="1.13.11"
+bundle_livekit() {
+  local out="$APP/Contents/MacOS/livekit-server"
+  local here; here="$(brew --prefix livekit 2>/dev/null)/bin/livekit-server"
+  if [ ! -x "$here" ]; then
+    echo "livekit-server not installed (brew install livekit); the host will need it on its own Mac"
+    return 0
+  fi
+  local have; have="$("$here" --version 2>/dev/null | awk '{print $3}')"
+  [ "$have" = "$LIVEKIT_VERSION" ] || echo "note: bundling livekit-server $have, pinned version is $LIVEKIT_VERSION"
+  cp "$here" "$out"
+  # The other architecture, best effort.
+  local other_tag; [ "$(uname -m)" = "arm64" ] && other_tag="x86_64_sonoma" || other_tag="arm64_sonoma"
+  local tmp; tmp="$(mktemp -d)"
+  if brew fetch --quiet --bottle-tag="$other_tag" livekit >/dev/null 2>&1; then
+    local bottle; bottle="$(brew --cache --bottle-tag="$other_tag" livekit 2>/dev/null)"
+    if [ -f "$bottle" ] && tar -xzf "$bottle" -C "$tmp" 2>/dev/null; then
+      local other; other="$(find "$tmp" -name livekit-server -type f | head -1)"
+      if [ -n "$other" ] && lipo -create "$here" "$other" -output "$out" 2>/dev/null; then
+        echo "livekit-server bundled as a universal binary"
+      fi
+    fi
+  fi
+  rm -rf "$tmp"
+  [ -x "$out" ] && echo "livekit-server $(lipo -archs "$out" 2>/dev/null) bundled"
+}
+bundle_livekit
+
 [ -f "$ROOT/Resources/AppIcon.icns" ] || swift "$ROOT/scripts/make-icon.swift" "$ROOT/Resources/AppIcon.icns"
 cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 # SwiftPM bakes an absolute rpath to .build/; add one that works when the bundle is copied elsewhere.

@@ -32,6 +32,8 @@ final class HostController: NSObject, ObservableObject {
     @Published private(set) var viewers: [String] = []
     @Published private(set) var openPortals: [WindowInfo] = []
     @Published private(set) var installedApps: [InstalledApp] = []
+    /// livekit-server could not be found when starting.
+    @Published private(set) var livekitMissing = false
     @Published var config: TeleportConfig {
         didSet { try? config.save() }
     }
@@ -42,6 +44,8 @@ final class HostController: NSObject, ObservableObject {
     private var control: ControlServer?
     private let room = Room()
     private let injector = InputInjector()
+    private let bonjour = BonjourAdvertiser()
+    private let clipboard = ClipboardSync()
     private var portals: [CGWindowID: Portal] = [:]
     private var activity: NSObjectProtocol?
     private let trustStore = JSONListStore<TrustedDevice>(filename: "trust.json")
@@ -62,6 +66,7 @@ final class HostController: NSObject, ObservableObject {
     func start() async {
         guard state == .stopped || state.isFailed else { return }
         state = .starting
+        livekitMissing = false
         do {
             checkPermissions()
             addresses = NetworkAddresses.current()
@@ -78,6 +83,9 @@ final class HostController: NSObject, ObservableObject {
             }
 
             let server = LiveKitServer(config: config)
+            server.onUnexpectedExit = { [weak self] in
+                Task { @MainActor in await self?.recoverFromServerExit() }
+            }
             try await server.start()
             self.server = server
 
@@ -96,11 +104,14 @@ final class HostController: NSObject, ObservableObject {
             try await room.registerByteStreamHandler(for: Topic.files) { [weak self] reader, _ in
                 await self?.receiveFile(reader)
             }
+            bonjour.start(name: config.deviceName, port: config.port, publicKey: identity.publicKeyHex)
+            clipboard.onChange = { [weak self] text in self?.broadcastClipboard(text) }
             state = .hosting
             Log.info("hosting on port \(config.port); allowed apps: \(config.allowedApps.joined(separator: ", "))")
         } catch {
             Log.error("host failed to start: \(error)")
-            state = .failed("\(error)")
+            livekitMissing = "\(error)".contains("livekit-server not found")
+            state = .failed(livekitMissing ? "The streaming server is missing." : "\(error)")
             server?.stop()
             control?.stop()
         }
@@ -108,6 +119,8 @@ final class HostController: NSObject, ObservableObject {
 
     func stop() async {
         for id in Array(portals.keys) { await close(id) }
+        clipboard.stop()
+        bonjour.stop()
         await room.disconnect()
         control?.stop()
         control = nil
@@ -118,8 +131,32 @@ final class HostController: NSObject, ObservableObject {
 
     /// Synchronous shutdown for signal handlers and app termination.
     func stopNow() {
+        bonjour.stop()
         control?.stop()
         server?.stop()
+    }
+
+    /// livekit-server died on its own: start over. Viewers reconnect by themselves.
+    private func recoverFromServerExit() async {
+        guard state == .hosting else { return }
+        Log.warn("livekit-server died; restarting the host")
+        server = nil
+        await stop()
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        await start()
+    }
+
+    // MARK: - Clipboard
+
+    private func broadcastClipboard(_ text: String) {
+        guard config.clipboardSyncEnabled, !room.remoteParticipants.isEmpty,
+              let data = try? JSONEncoder().encode(ClipboardMessage(text: text)) else { return }
+        Task { try? await room.localParticipant.publish(data: data, options: DataPublishOptions(topic: Topic.clipboard, reliable: true)) }
+    }
+
+    private func applyClipboard(_ data: Data) {
+        guard config.clipboardSyncEnabled, let message = try? JSONDecoder().decode(ClipboardMessage.self, from: data) else { return }
+        clipboard.apply(message.text)
     }
 
     private func checkPermissions() {
@@ -385,7 +422,13 @@ final class HostController: NSObject, ObservableObject {
         viewers = room.remoteParticipants.values.compactMap { $0.identity?.stringValue }
         // Stop capturing once the last viewer is gone.
         guard room.remoteParticipants.isEmpty else { return }
+        clipboard.stop()
         for id in Array(portals.keys) { await close(id) }
+    }
+
+    private func viewerJoined() {
+        viewers = room.remoteParticipants.values.compactMap { $0.identity?.stringValue }
+        if config.clipboardSyncEnabled { clipboard.start() }
     }
 }
 
@@ -395,13 +438,16 @@ extension HostController.State {
 
 extension HostController: RoomDelegate {
     nonisolated func room(_: Room, participant _: RemoteParticipant?, didReceiveData data: Data, forTopic topic: String, encryptionType _: EncryptionType) {
-        guard topic == Topic.input else { return }
-        Task { @MainActor in self.handleInput(data) }
+        switch topic {
+        case Topic.input: Task { @MainActor in self.handleInput(data) }
+        case Topic.clipboard: Task { @MainActor in self.applyClipboard(data) }
+        default: break
+        }
     }
 
-    nonisolated func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
+    nonisolated func room(_: Room, participantDidConnect participant: RemoteParticipant) {
         Log.info("viewer joined: \(participant.identity?.stringValue ?? "?")")
-        Task { @MainActor in self.viewers = room.remoteParticipants.values.compactMap { $0.identity?.stringValue } }
+        Task { @MainActor in self.viewerJoined() }
     }
 
     nonisolated func room(_: Room, participantDidDisconnect participant: RemoteParticipant) {

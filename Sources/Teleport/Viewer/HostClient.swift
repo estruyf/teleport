@@ -17,8 +17,10 @@ enum HostClient {
         return URL(string: "http://\(host):\(port + 3)")!
     }
 
-    static func info(address: String, port: Int) async throws -> HostInfo {
-        try await get(controlURL(address: address, port: port).appendingPathComponent(ControlPath.info))
+    static func info(address: String, port: Int, timeout: TimeInterval = 10) async throws -> HostInfo {
+        var request = URLRequest(url: controlURL(address: address, port: port).appendingPathComponent(ControlPath.info))
+        request.timeoutInterval = timeout
+        return try await perform(request)
     }
 
     /// Returns the fingerprint to show while the host decides, then the paired host once it allows.
@@ -45,10 +47,6 @@ enum HostClient {
     }
 
     // MARK: - HTTP
-
-    private static func get<T: Decodable>(_ url: URL) async throws -> T {
-        try await perform(URLRequest(url: url))
-    }
 
     private static func post<T: Decodable>(_ url: URL, _ body: some Encodable) async throws -> T {
         var request = URLRequest(url: url)

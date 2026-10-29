@@ -19,5 +19,6 @@ let package = Package(
         ),
         // One copy of this runs per remote app, so it gets its own badged Dock icon.
         .executableTarget(name: "TeleportDockTile", dependencies: ["TeleportCore"]),
+        .testTarget(name: "TeleportCoreTests", dependencies: ["TeleportCore"]),
     ]
 )

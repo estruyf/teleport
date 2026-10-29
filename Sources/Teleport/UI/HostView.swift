@@ -8,71 +8,77 @@ struct HostView: View {
     @ObservedObject var host: HostController
     @Local private var showAddApp = false
     @Local private var now = Date()
+    @Local private var loginNotice: String?
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                statusCard
-                permissionNotices
-                pairingCard
-                if !host.trusted.isEmpty { devicesCard }
-                appsCard
+        ZStack(alignment: .top) {
+            BeamBackdrop(strength: host.state == .hosting ? 1 : 0.4)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    hero
+                    permissionNotices
+                    pairingCard
+                    if !host.trusted.isEmpty { devicesCard }
+                    appsCard
+                    setupCard
+                }
+                .padding(20)
             }
-            .padding(20)
         }
         .onReceive(tick) { now = $0 }
-        .alert(item: Binding(get: { host.pendingApproval }, set: { _ in })) { pending in
-            Alert(
-                title: Text("Allow \(pending.name) to use this Mac's apps?"),
-                message: Text("The other Mac shows the same code: \(pending.fingerprint). If it doesn't, press Deny."),
-                primaryButton: .default(Text("Allow")) { host.approvePairing() },
-                secondaryButton: .cancel(Text("Deny")) { host.denyPairing() }
-            )
+        .sheet(item: Binding(get: { host.pendingApproval }, set: { _ in })) { pending in
+            AllowSheet(host: host, pending: pending)
         }
     }
 
-    // MARK: - Status
+    // MARK: - Hero
 
-    private var statusCard: some View {
+    private var hero: some View {
         Card {
-            HStack(alignment: .top) {
+            HStack(spacing: 18) {
+                PortalRing(mood: host.state == .hosting ? .live : (host.state == .starting ? .busy : .idle), size: 64)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 10) {
-                        Text(host.config.deviceName).font(.title2.weight(.semibold))
+                        Text(host.config.deviceName).font(.title.weight(.semibold))
                         statusPill
                     }
-                    if host.state == .hosting {
-                        Text(host.viewers.isEmpty ? "No viewer connected." : "\(host.viewers.count) viewer\(host.viewers.count == 1 ? "" : "s") connected, \(host.openPortals.count) window\(host.openPortals.count == 1 ? "" : "s") open.")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                    if case let .failed(message) = host.state {
-                        Text(message).font(.callout).foregroundStyle(Theme.bad)
+                    Text(heroLine).font(.callout).foregroundStyle(host.state.isFailed ? Theme.bad : .secondary)
+                    if host.state == .hosting, !host.addresses.isEmpty {
+                        HStack(spacing: 8) {
+                            Text("Reach it at").font(.caption).foregroundStyle(.secondary)
+                            ForEach(host.addresses, id: \.self) { CopyChip(text: $0) }
+                            Chip(text: "port \(host.config.port)", mono: true)
+                        }
+                        .padding(.top, 2)
                     }
                 }
                 Spacer()
                 switch host.state {
                 case .hosting: Button("Stop") { Task { await host.stop() } }
-                case .stopped, .failed: Button("Start") { Task { await host.start() } }.primaryAction()
+                case .stopped, .failed: Button("Start hosting") { Task { await host.start() } }.primaryAction()
                 case .starting: ProgressView().controlSize(.small)
-                }
-            }
-            if !host.addresses.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Reach this Mac at").font(.caption).foregroundStyle(.secondary)
-                    HStack(spacing: 8) {
-                        ForEach(host.addresses, id: \.self) { CopyChip(text: $0) }
-                        Chip(text: "port \(host.config.port)", mono: true)
-                    }
                 }
             }
         }
     }
 
+    private var heroLine: String {
+        switch host.state {
+        case .hosting:
+            if host.viewers.isEmpty { return "Ready. No Mac is looking at it right now." }
+            let v = host.viewers.count, w = host.openPortals.count
+            return "\(v) Mac\(v == 1 ? "" : "s") connected, \(w) window\(w == 1 ? "" : "s") open."
+        case .starting: return "Starting the streaming server…"
+        case .stopped: return "Not sharing anything."
+        case let .failed(message): return message
+        }
+    }
+
     private var statusPill: some View {
         switch host.state {
-        case .hosting: StatusPill(text: "Hosting", color: Theme.ok)
-        case .starting: StatusPill(text: "Starting", color: Theme.warn)
+        case .hosting: StatusPill(text: "Hosting", color: Theme.ok, pulsing: !host.viewers.isEmpty)
+        case .starting: StatusPill(text: "Starting", color: Theme.warn, pulsing: true)
         case .stopped: StatusPill(text: "Stopped", color: .gray)
         case .failed: StatusPill(text: "Failed", color: Theme.bad)
         }
@@ -80,41 +86,62 @@ struct HostView: View {
 
     @ViewBuilder private var permissionNotices: some View {
         if !host.hasScreenRecording {
-            Notice(text: "Screen Recording is off. Teleport can't stream windows without it.", kind: .warning,
+            Notice(text: "Screen Recording is off, so nothing can be streamed. After switching it on, macOS asks to quit and reopen Teleport. That's normal.", kind: .warning,
                    action: ("Open System Settings", { SystemSettings.open("Privacy_ScreenCapture") }))
         }
         if !host.hasAccessibility {
             Notice(text: "Accessibility is off. Viewers can see windows but not click or type.", kind: .warning,
                    action: ("Open System Settings", { SystemSettings.open("Privacy_Accessibility") }))
         }
+        if host.livekitMissing {
+            Notice(text: "The streaming server (livekit-server) is missing. Rebuild the app with it bundled, or install it with Homebrew: brew install livekit.", kind: .error,
+                   action: ("Try again", { Task { await host.start() } }))
+        }
     }
 
     // MARK: - Pairing
 
     private var pairingCard: some View {
-        Card(title: "Pair a Mac", subtitle: "On the other Mac, choose Pair a new Mac and type this code.") {
+        Card(title: "Pair a Mac", subtitle: "On the other Mac, press Pair a new Mac and type this code.") {
             if let pairing = host.pairingCode {
-                HStack(alignment: .center, spacing: 20) {
+                let left = max(0, pairing.expires.timeIntervalSince(now))
+                HStack(spacing: 24) {
                     CodeDisplay(code: pairing.code)
+                    ZStack {
+                        Circle().stroke(Color.primary.opacity(0.08), lineWidth: 5)
+                        Circle().trim(from: 0, to: left / 120)
+                            .stroke(Theme.remote, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .animation(.linear(duration: 1), value: left)
+                        Text("\(Int(left))").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                    .frame(width: 48, height: 48)
                     VStack(alignment: .leading, spacing: 6) {
-                        let left = max(0, Int(pairing.expires.timeIntervalSince(now)))
-                        Text("Expires in \(left / 60):\(String(format: "%02d", left % 60))").font(.callout).foregroundStyle(.secondary)
-                        if host.pendingApproval != nil {
-                            Text("Waiting for you to allow…").font(.callout).foregroundStyle(Theme.remote)
-                        }
+                        Text(host.pendingApproval == nil ? "Waiting for the other Mac…" : "A Mac is asking. Check the code.")
+                            .font(.callout).foregroundStyle(Theme.remote)
                         Button("Cancel") { host.cancelPairing() }.controlSize(.small)
                     }
+                    Spacer()
                 }
             } else {
-                Button("Show pairing code") { host.startPairing() }
+                HStack {
+                    Button {
+                        host.startPairing()
+                    } label: {
+                        Label("Show pairing code", systemImage: "link.badge.plus")
+                    }
                     .primaryAction()
                     .disabled(host.state != .hosting)
+                    if host.state != .hosting {
+                        Text("Start hosting first.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
         }
     }
 
     private var devicesCard: some View {
-        Card(title: "Paired Macs") {
+        Card(title: "Paired Macs", subtitle: "These Macs may open the shared apps. Revoke ends their access at once.") {
             ForEach(host.trusted) { device in
                 HStack {
                     Image(systemName: "laptopcomputer").foregroundStyle(Theme.remote)
@@ -123,8 +150,11 @@ struct HostView: View {
                         Text(lastSeen(device)).font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
+                    if host.viewers.contains(where: { $0.hasSuffix(String(device.publicKey.prefix(8))) }) {
+                        StatusPill(text: "Connected", color: Theme.ok, pulsing: true)
+                    }
                     Chip(text: String(device.publicKey.prefix(8)), mono: true)
-                    Button("Revoke") { host.revoke(device) }.controlSize(.small)
+                    Button("Revoke", role: .destructive) { host.revoke(device) }.controlSize(.small)
                 }
                 if device.id != host.trusted.last?.id { Divider() }
             }
@@ -145,28 +175,81 @@ struct HostView: View {
     }
 
     private var appsCard: some View {
-        Card(title: "Shared apps", subtitle: "Viewers only see and open windows of these apps.") {
+        Card(title: "Shared apps", subtitle: "Viewers only see and open windows of these apps. Everything else stays private.") {
             if sharedApps.isEmpty {
-                EmptyState(icon: "square.grid.2x2", title: "Nothing shared yet", detail: "Add the apps viewers may use. Everything else stays private.")
+                EmptyState(icon: "square.grid.2x2", title: "Nothing shared yet", detail: "Add the apps your other Macs may use.")
             } else {
-                ForEach(sharedApps, id: \.bundleID) { entry in
-                    HStack(spacing: 10) {
-                        AppIconView(image: entry.installed.map(InstalledApps.icon(for:)), size: 28)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(entry.installed?.name ?? entry.bundleID)
-                            if entry.installed == nil {
-                                Text("Not installed on this Mac").font(.caption).foregroundStyle(.secondary)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 10)], spacing: 10) {
+                    ForEach(sharedApps, id: \.bundleID) { entry in
+                        HStack(spacing: 10) {
+                            AppIconView(image: entry.installed.map(InstalledApps.icon(for:)), size: 30)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(entry.installed?.name ?? entry.bundleID).lineLimit(1)
+                                if entry.installed == nil {
+                                    Text("Not installed here").font(.caption).foregroundStyle(.secondary)
+                                }
                             }
+                            Spacer()
+                            Button { host.setAllowed(entry.bundleID, false) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary) }
+                                .buttonStyle(.plain).help("Stop sharing")
                         }
-                        Spacer()
-                        Button("Remove") { host.setAllowed(entry.bundleID, false) }.controlSize(.small)
+                        .padding(8)
+                        .background(Theme.remote.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
-                    if entry.bundleID != sharedApps.last?.bundleID { Divider() }
                 }
             }
             Button { showAddApp = true } label: { Label("Add app", systemImage: "plus") }
         }
         .sheet(isPresented: $showAddApp) { AddAppSheet(host: host) }
+    }
+
+    // MARK: - Setup
+
+    private var setupCard: some View {
+        Card(title: "Keep it running") {
+            Toggle(isOn: Binding(get: { LoginItem.isEnabled || LoginItem.needsApproval }, set: { on in
+                loginNotice = LoginItem.set(on)
+            })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Start Teleport when this Mac logs in")
+                    Text("So a reboot of the office Mac comes back hosting on its own.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+            if LoginItem.needsApproval {
+                Notice(text: "macOS wants you to confirm this under Login Items.", kind: .info, action: ("Open Login Items", { SystemSettings.openLoginItems() }))
+            }
+            if let loginNotice { Notice(text: loginNotice, kind: .error) }
+        }
+    }
+}
+
+/// The host decides whether a Mac that typed the code may connect.
+private struct AllowSheet: View {
+    @ObservedObject var host: HostController
+    let pending: HostController.PendingApproval
+
+    var body: some View {
+        VStack(spacing: 22) {
+            Text("Allow \(pending.name)?").font(.title2.weight(.semibold))
+            HStack(spacing: 0) {
+                MacGlyph(symbol: "laptopcomputer", label: pending.name, tint: Theme.remote)
+                Rectangle().fill(Theme.remote.opacity(0.5)).frame(height: 2).frame(maxWidth: 120)
+                    .overlay(Image(systemName: "arrow.left.arrow.right").font(.caption).foregroundStyle(Theme.remote).padding(6).background(.background, in: Circle()))
+                MacGlyph(symbol: "macmini.fill", label: host.config.deviceName, tint: .primary)
+            }
+            VStack(spacing: 6) {
+                Text("It shows this code too:").font(.callout).foregroundStyle(.secondary)
+                Text(pending.fingerprint).font(.system(size: 40, weight: .bold, design: .rounded).monospacedDigit()).foregroundStyle(Theme.remote)
+                Text("If the codes differ, someone is in between. Press Deny.").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Button("Deny", role: .cancel) { host.denyPairing() }.keyboardShortcut(.cancelAction)
+                Button("Allow") { host.approvePairing() }.primaryAction().keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(28)
+        .frame(width: 460)
     }
 }
 
@@ -186,7 +269,7 @@ private struct AddAppSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Add an app to share").font(.title3.weight(.semibold))
+                Text("Share an app").font(.title3.weight(.semibold))
                 Spacer()
                 Button { host.rescanApps() } label: { Image(systemName: "arrow.clockwise") }.help("Rescan installed apps")
             }

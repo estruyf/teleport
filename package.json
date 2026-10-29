@@ -16,7 +16,10 @@
     "stop": "pkill -x Teleport; pkill -x TeleportDockTile; pkill -f 'livekit-server --config' || true",
     "clean": "rm -rf .build build",
     "deps": "brew list livekit >/dev/null 2>&1 || brew install livekit",
-    "start:loopback-host": "npm run bundle && open -n --env TELEPORT_HOME=$HOME/.teleport-host build/Teleport.app"
+    "start:loopback-host": "npm run bundle && open -n --env TELEPORT_HOME=$HOME/.teleport-host build/Teleport.app",
+    "test": "swift test -Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
+    "dist": "scripts/release.sh",
+    "dist:notarized": "NOTARY_PROFILE=${NOTARY_PROFILE:-teleport} scripts/release.sh"
   },
   "engines": {
     "node": ">=18"
