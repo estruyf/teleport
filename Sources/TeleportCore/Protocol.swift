@@ -185,3 +185,22 @@ public struct IconResponse: Codable {
     public var png: String
     public init(png: String) { self.png = png }
 }
+
+// MARK: - Files and control
+
+public extension Topic {
+    /// Byte streams carrying dropped files, host-bound.
+    static let files = "files"
+}
+
+public extension RPCMethod {
+    /// Host to viewer: your pairing was revoked, disconnect.
+    static let kick = "teleport.kick"
+}
+
+/// Attributes on a file stream: where on the window it was dropped.
+public enum FileDropKeys {
+    public static let windowID = "windowID"
+    public static let x = "x"
+    public static let y = "y"
+}

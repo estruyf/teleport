@@ -10,14 +10,12 @@ let package = Package(
     targets: [
         // Declarations for the private macOS APIs we use (CGVirtualDisplay, _AXUIElementGetWindow).
         .target(name: "CPrivate", linkerSettings: [.linkedFramework("CoreGraphics"), .linkedFramework("ApplicationServices")]),
+        // Config, identity, pairing crypto, wire protocol: shared by the app and the dock tile.
         .target(name: "TeleportCore"),
+        // The app: host or viewer, chosen on first launch.
         .executableTarget(
-            name: "TeleportHost",
+            name: "Teleport",
             dependencies: ["CPrivate", "TeleportCore", .product(name: "LiveKit", package: "client-sdk-swift")]
-        ),
-        .executableTarget(
-            name: "TeleportViewer",
-            dependencies: ["TeleportCore", .product(name: "LiveKit", package: "client-sdk-swift")]
         ),
         // One copy of this runs per remote app, so it gets its own badged Dock icon.
         .executableTarget(name: "TeleportDockTile", dependencies: ["TeleportCore"]),

@@ -1,0 +1,24 @@
+{
+  "name": "teleport",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Share individual app windows from a headless Mac to the Mac you work on, Coherence-style.",
+  "scripts": {
+    "build": "swift build",
+    "build:release": "swift build -c release",
+    "bundle": "scripts/bundle.sh debug",
+    "bundle:release": "scripts/bundle.sh release",
+    "icon": "swift scripts/make-icon.swift Resources/AppIcon.icns",
+    "start": "npm run bundle && open build/Teleport.app",
+    "start:release": "npm run bundle:release && open build/Teleport.app",
+    "logs": "tail -f ~/.teleport/app.log",
+    "logs:livekit": "tail -f ~/.teleport/livekit-server.log",
+    "stop": "pkill -x Teleport; pkill -x TeleportDockTile; pkill -f 'livekit-server --config' || true",
+    "clean": "rm -rf .build build",
+    "deps": "brew list livekit >/dev/null 2>&1 || brew install livekit",
+    "start:loopback-host": "npm run bundle && open -n --env TELEPORT_HOME=$HOME/.teleport-host build/Teleport.app"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
