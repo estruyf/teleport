@@ -26,6 +26,17 @@ enum NetworkAddresses {
     }
 }
 
+/// Whether this Mac's session is locked. Synthetic key events then go to the lock screen,
+/// not the apps, while window capture carries on, so portals open but nothing types.
+enum ScreenLock {
+    static var isLocked: Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        let locked = session["CGSSessionScreenIsLocked"] as? Bool ?? false
+        let onConsole = session[kCGSessionOnConsoleKey as String] as? Bool ?? true
+        return locked || !onConsole
+    }
+}
+
 struct InstalledApp: Identifiable, Hashable {
     let bundleID: String
     let name: String

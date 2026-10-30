@@ -50,6 +50,9 @@ final class HostController: NSObject, ObservableObject {
     private let clipboard = ClipboardSync()
     private var portals: [CGWindowID: Portal] = [:]
     private var activity: NSObjectProtocol?
+    private var lockObservers: [NSObjectProtocol] = []
+    /// Last lock state sent to viewers.
+    private var sentLocked: Bool?
     private let trustStore = JSONListStore<TrustedDevice>(filename: "trust.json")
     private var approvalContinuation: CheckedContinuation<Bool, Never>?
     private var usedNonces: Set<String> = []
@@ -76,11 +79,14 @@ final class HostController: NSObject, ObservableObject {
             // Opens every app bundle in /Applications; keep that off the main thread.
             installedApps = await Task.detached(priority: .userInitiated) { InstalledApps.scan() }.value
 
-            // Nobody sits at this Mac; keep it awake while hosting.
+            // Nobody sits at this Mac; keep it awake while hosting. The display too: when it
+            // turns off (as soon as Screen Sharing ends on a Mac without a screen), macOS
+            // locks the session and typed keys stop reaching the apps.
             activity = ProcessInfo.processInfo.beginActivity(
-                options: [.idleSystemSleepDisabled, .userInitiated],
+                options: [.idleSystemSleepDisabled, .idleDisplaySleepDisabled, .userInitiated],
                 reason: "Teleport is hosting windows"
             )
+            watchScreenLock()
 
             if config.virtualDisplay.enabled, virtualDisplay == nil {
                 startVirtualDisplay()
@@ -123,6 +129,10 @@ final class HostController: NSObject, ObservableObject {
 
     func stop() async {
         for id in Array(portals.keys) { await close(id) }
+        if let activity { ProcessInfo.processInfo.endActivity(activity) }
+        activity = nil
+        for observer in lockObservers { DistributedNotificationCenter.default().removeObserver(observer) }
+        lockObservers = []
         clipboard.stop()
         bonjour.stop()
         await room.disconnect()
@@ -162,6 +172,28 @@ final class HostController: NSObject, ObservableObject {
     private func applyClipboard(_ data: Data) {
         guard config.clipboardSyncEnabled, let message = try? JSONDecoder().decode(ClipboardMessage.self, from: data) else { return }
         clipboard.apply(message.text)
+    }
+
+    // MARK: - Screen lock
+
+    private func watchScreenLock() {
+        guard lockObservers.isEmpty else { return }
+        let center = DistributedNotificationCenter.default()
+        for name in ["com.apple.screenIsLocked", "com.apple.screenIsUnlocked"] {
+            lockObservers.append(center.addObserver(forName: .init(name), object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.sendLockState() }
+            })
+        }
+    }
+
+    /// Tells viewers when the lock state changes; `force` resends it, for a viewer that just joined.
+    private func sendLockState(force: Bool = false) {
+        let locked = ScreenLock.isLocked
+        guard force || locked != sentLocked, !room.remoteParticipants.isEmpty else { return }
+        if locked != sentLocked { Log.info(locked ? "screen locked; input can't reach apps" : "screen unlocked") }
+        sentLocked = locked
+        guard let data = try? JSONEncoder().encode(HostStatus(locked: locked)) else { return }
+        Task { try? await room.localParticipant.publish(data: data, options: DataPublishOptions(topic: Topic.hostStatus, reliable: true)) }
     }
 
     private func checkPermissions() {
@@ -408,6 +440,8 @@ final class HostController: NSObject, ObservableObject {
         guard let event = try? JSONDecoder().decode(InputEvent.self, from: data),
               let portal = portals[event.windowID]
         else { return }
+        // In case a lock notification was missed: a key or click is when it matters.
+        if event.kind == .keyDown || event.kind == .mouseDown { sendLockState() }
         injector.handle(event, portal: portal)
     }
 
@@ -445,6 +479,7 @@ final class HostController: NSObject, ObservableObject {
     private func viewerJoined() {
         viewers = room.remoteParticipants.values.compactMap { $0.identity?.stringValue }
         if config.clipboardSyncEnabled { clipboard.start() }
+        sendLockState(force: true)
     }
 }
 

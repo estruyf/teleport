@@ -217,6 +217,19 @@ public struct ClipboardMessage: Codable {
     public init(text: String) { self.text = text }
 }
 
+// MARK: - Host status
+
+public extension Topic {
+    /// Host to viewer: sent when a viewer joins and whenever it changes.
+    static let hostStatus = "hostStatus"
+}
+
+public struct HostStatus: Codable {
+    /// The host's screen is locked, so typing and new windows can't reach its apps.
+    public var locked: Bool
+    public init(locked: Bool) { self.locked = locked }
+}
+
 public enum Discovery {
     public static let serviceType = "_teleport._tcp"
 }

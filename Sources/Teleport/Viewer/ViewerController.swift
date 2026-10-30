@@ -16,6 +16,8 @@ final class ViewerController: NSObject, ObservableObject {
     @Published private(set) var icons: [String: NSImage] = [:]
     @Published private(set) var busy = false
     @Published private(set) var notice: String?
+    /// The host's screen is locked: portals still show, but typing and new windows don't work.
+    @Published private(set) var hostLocked = false
     /// Shown while the host decides on a pairing.
     @Published private(set) var pairingFingerprint: String?
 
@@ -114,6 +116,7 @@ final class ViewerController: NSObject, ObservableObject {
         await room.disconnect()
         current = nil
         apps = []
+        hostLocked = false
         state = .idle
     }
 
@@ -126,6 +129,7 @@ final class ViewerController: NSObject, ObservableObject {
         dockTiles.removeAll()
         clipboard.stop()
         apps = []
+        hostLocked = false
         state = .connecting(host.name)
         notice = "Connection to \(host.name) lost. Reconnecting…"
         Log.warn("disconnected from \(host.name): \(String(describing: error)); reconnecting")
@@ -356,10 +360,18 @@ extension ViewerController: RoomDelegate {
     }
 
     nonisolated func room(_: Room, participant _: RemoteParticipant?, didReceiveData data: Data, forTopic topic: String, encryptionType _: EncryptionType) {
-        guard topic == Topic.clipboard else { return }
-        Task { @MainActor in
-            guard self.clipboardSyncEnabled, let message = try? JSONDecoder().decode(ClipboardMessage.self, from: data) else { return }
-            self.clipboard.apply(message.text)
+        switch topic {
+        case Topic.clipboard:
+            Task { @MainActor in
+                guard self.clipboardSyncEnabled, let message = try? JSONDecoder().decode(ClipboardMessage.self, from: data) else { return }
+                self.clipboard.apply(message.text)
+            }
+        case Topic.hostStatus:
+            Task { @MainActor in
+                guard let status = try? JSONDecoder().decode(HostStatus.self, from: data) else { return }
+                self.hostLocked = status.locked
+            }
+        default: break
         }
     }
 

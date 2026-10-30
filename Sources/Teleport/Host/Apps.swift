@@ -25,6 +25,10 @@ enum AppCatalog {
         guard allowedApps.contains(request.bundleID) else {
             throw HostError("\(request.bundleID) is not in allowedApps")
         }
+        // A locked Mac launches the app but swallows ⌘N, and new windows never show.
+        guard !ScreenLock.isLocked else {
+            throw HostError("the host is locked. Unlock it, then try again.")
+        }
         let before = Set(try await WindowCatalog.list(allowedApps: [request.bundleID]).map(\.id))
         let wasRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: request.bundleID).isEmpty
 

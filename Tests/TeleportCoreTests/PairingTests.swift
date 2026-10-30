@@ -122,7 +122,7 @@ import Testing
         let config = try JSONDecoder().decode(TeleportConfig.self, from: Data(json.utf8))
         #expect(config.mode == nil)
         #expect(config.clipboardSyncEnabled)
-        #expect(config.soundsEnabled)
+        #expect(!config.soundsEnabled)
         #expect(config.controlPort == 7883)
     }
 }

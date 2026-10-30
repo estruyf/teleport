@@ -120,6 +120,9 @@ struct ViewerView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if viewer.hostLocked {
+                        Notice(text: "\(viewer.current?.name ?? "The host") is locked. Its windows still show, but typing and opening new windows won't work until you unlock it, for example with Screen Sharing.", kind: .warning)
+                    }
                     if let notice = viewer.notice { Notice(text: notice, kind: notice.hasPrefix("Could not") ? .error : .info) }
                     if viewer.apps.isEmpty {
                         EmptyState(icon: "square.grid.2x2", title: "Nothing shared yet",
