@@ -9,6 +9,10 @@ final class StatusBar: NSObject, NSMenuDelegate {
     private let app: AppModel
     private let openWindow: () -> Void
     private var cancellable: AnyCancellable?
+    private var menuOpen = false
+    /// What the open menu shows of the viewer's apps, so it is only rebuilt when that changes.
+    private var shownApps: [AppInfo] = []
+    private var shownIcons = 0
 
     init(app: AppModel, openWindow: @escaping () -> Void) {
         self.app = app
@@ -19,7 +23,7 @@ final class StatusBar: NSObject, NSMenuDelegate {
         menu.delegate = self
         item.menu = menu
         cancellable = app.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.updateBadge() }
+            DispatchQueue.main.async { self?.appChanged() }
         }
         updateBadge()
     }
@@ -52,6 +56,15 @@ final class StatusBar: NSObject, NSMenuDelegate {
         return image
     }
 
+    private func appChanged() {
+        updateBadge()
+        // The app list refreshes after the menu opens; show the fresh one without reopening.
+        if menuOpen, let viewer = app.viewer, let menu = item.menu,
+           viewer.apps != shownApps || viewer.icons.count != shownIcons {
+            menuNeedsUpdate(menu)
+        }
+    }
+
     private func updateBadge() {
         let hosting = app.host?.state == .hosting
         let connected = app.viewer?.connected ?? false
@@ -59,8 +72,16 @@ final class StatusBar: NSObject, NSMenuDelegate {
         item.button?.toolTip = hosting ? "Teleport: hosting" : connected ? "Teleport: connected" : "Teleport"
     }
 
+    func menuWillOpen(_: NSMenu) {
+        menuOpen = true
+        if let viewer = app.viewer, viewer.connected { Task { await viewer.refresh() } }
+    }
+
+    func menuDidClose(_: NSMenu) { menuOpen = false }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        shownApps = []
         menu.addItem(withTitle: "Open Teleport", action: #selector(open), keyEquivalent: "o").target = self
 
         if let host = app.host {
@@ -94,6 +115,7 @@ final class StatusBar: NSObject, NSMenuDelegate {
             case let .connected(name):
                 menu.addItem(disabled("Connected to \(name)"))
                 menu.addItem(withTitle: "Disconnect", action: #selector(disconnect), keyEquivalent: "").target = self
+                addApps(of: viewer, hostName: name, to: menu)
             case let .connecting(name):
                 menu.addItem(disabled("Connecting to \(name)…"))
                 menu.addItem(withTitle: "Cancel", action: #selector(disconnect), keyEquivalent: "").target = self
@@ -114,6 +136,63 @@ final class StatusBar: NSObject, NSMenuDelegate {
         menu.addItem(withTitle: "Quit Teleport", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 
+    /// The connected host's shared apps; a running app's submenu lists its windows, a check marking the ones open here.
+    private func addApps(of viewer: ViewerController, hostName: String, to menu: NSMenu) {
+        shownApps = viewer.apps
+        shownIcons = viewer.icons.count
+        menu.addItem(.separator())
+        menu.addItem(.sectionHeader(title: "Apps on \(hostName)"))
+        if viewer.apps.isEmpty {
+            menu.addItem(disabled("No shared apps"))
+            return
+        }
+        let open = viewer.openWindowIDs
+        for remoteApp in viewer.apps {
+            let entry = NSMenuItem(title: remoteApp.name, action: nil, keyEquivalent: "")
+            entry.image = viewer.icons[remoteApp.bundleID].map(Self.menuIcon)
+            if remoteApp.running {
+                let actions = NSMenu()
+                actions.addItem(action("New Window", #selector(newWindow(_:)), remoteApp))
+                actions.addItem(.separator())
+                if !remoteApp.windows.isEmpty {
+                    actions.addItem(.sectionHeader(title: "Instances"))
+                    for window in remoteApp.windows {
+                        let row = action(window.title.isEmpty ? "Untitled" : window.title, #selector(openPortal(_:)), window)
+                        row.state = open.contains(window.id) ? .on : .off
+                        actions.addItem(row)
+                    }
+                    actions.addItem(.separator())
+                }
+                actions.addItem(action("Quit \(remoteApp.name)", #selector(quitApp(_:)), remoteApp))
+                // Holding Option turns Quit into Force Quit, as in the Dock.
+                let force = action("Force Quit \(remoteApp.name)…", #selector(forceQuitApp(_:)), remoteApp)
+                force.isAlternate = true
+                force.keyEquivalentModifierMask = .option
+                actions.addItem(force)
+                entry.submenu = actions
+            } else {
+                entry.action = #selector(launchApp(_:))
+                entry.target = self
+                entry.representedObject = remoteApp
+                entry.toolTip = "Launch \(remoteApp.name) on \(hostName)"
+            }
+            menu.addItem(entry)
+        }
+    }
+
+    private static func menuIcon(_ image: NSImage) -> NSImage {
+        let icon = image.copy() as! NSImage
+        icon.size = NSSize(width: 16, height: 16)
+        return icon
+    }
+
+    private func action(_ title: String, _ selector: Selector, _ object: Any) -> NSMenuItem {
+        let entry = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+        entry.target = self
+        entry.representedObject = object
+        return entry
+    }
+
     private func disabled(_ title: String) -> NSMenuItem {
         let entry = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         entry.isEnabled = false
@@ -126,6 +205,39 @@ final class StatusBar: NSObject, NSMenuDelegate {
     @objc private func startHost() { Task { await app.host?.start() } }
     @objc private func stopHost() { Task { await app.host?.stop() } }
     @objc private func disconnect() { Task { await app.viewer?.disconnect() } }
+    @objc private func launchApp(_ sender: NSMenuItem) {
+        guard let remoteApp = sender.representedObject as? AppInfo else { return }
+        Task { await app.viewer?.launch(remoteApp, newWindow: false) }
+    }
+
+    @objc private func newWindow(_ sender: NSMenuItem) {
+        guard let remoteApp = sender.representedObject as? AppInfo else { return }
+        Task { await app.viewer?.launch(remoteApp, newWindow: true) }
+    }
+
+    @objc private func openPortal(_ sender: NSMenuItem) {
+        guard let window = sender.representedObject as? WindowInfo else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        Task { await app.viewer?.open(window) }
+    }
+
+    @objc private func quitApp(_ sender: NSMenuItem) {
+        guard let remoteApp = sender.representedObject as? AppInfo else { return }
+        Task { await app.viewer?.quit(remoteApp, force: false) }
+    }
+
+    @objc private func forceQuitApp(_ sender: NSMenuItem) {
+        guard let remoteApp = sender.representedObject as? AppInfo else { return }
+        let alert = NSAlert()
+        alert.messageText = "Force quit \(remoteApp.name) on the host?"
+        alert.informativeText = "Unsaved changes in \(remoteApp.name) are lost."
+        alert.addButton(withTitle: "Force Quit").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Task { await app.viewer?.quit(remoteApp, force: true) }
+    }
+
     @objc private func connect(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String, let host = app.viewer?.hosts.first(where: { $0.publicKey == key }) else { return }
         Task { await app.viewer?.connect(host) }

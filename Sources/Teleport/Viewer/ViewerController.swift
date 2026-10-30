@@ -39,6 +39,9 @@ final class ViewerController: NSObject, ObservableObject {
 
     var connected: Bool { if case .connected = state { true } else { false } }
 
+    /// Host windows that have a portal open here.
+    var openWindowIDs: Set<UInt32> { Set(portals.keys) }
+
     init(identity: DeviceIdentity, deviceName: String) {
         self.identity = identity
         self.deviceName = deviceName
