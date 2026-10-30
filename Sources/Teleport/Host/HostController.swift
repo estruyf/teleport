@@ -32,6 +32,8 @@ final class HostController: NSObject, ObservableObject {
     @Published private(set) var viewers: [String] = []
     @Published private(set) var openPortals: [WindowInfo] = []
     @Published private(set) var installedApps: [InstalledApp] = []
+    @Published private(set) var hasScreenRecording = CGPreflightScreenCaptureAccess()
+    @Published private(set) var hasAccessibility = AXIsProcessTrusted()
     /// livekit-server could not be found when starting.
     @Published private(set) var livekitMissing = false
     @Published var config: TeleportConfig {
@@ -69,6 +71,7 @@ final class HostController: NSObject, ObservableObject {
         livekitMissing = false
         do {
             checkPermissions()
+            refreshPermissions()
             addresses = NetworkAddresses.current()
             installedApps = InstalledApps.scan()
 
@@ -170,8 +173,19 @@ final class HostController: NSObject, ObservableObject {
         }
     }
 
-    var hasScreenRecording: Bool { CGPreflightScreenCaptureAccess() }
-    var hasAccessibility: Bool { AXIsProcessTrusted() }
+    /// Re-checks both permissions off the main thread; the TCC lookups can take tens of ms.
+    func refreshPermissions() {
+        Task.detached(priority: .utility) { [weak self] in
+            let screen = CGPreflightScreenCaptureAccess()
+            let accessibility = AXIsProcessTrusted()
+            await self?.applyPermissions(screen: screen, accessibility: accessibility)
+        }
+    }
+
+    private func applyPermissions(screen: Bool, accessibility: Bool) {
+        if hasScreenRecording != screen { hasScreenRecording = screen }
+        if hasAccessibility != accessibility { hasAccessibility = accessibility }
+    }
 
     private func startVirtualDisplay() {
         let vd = config.virtualDisplay

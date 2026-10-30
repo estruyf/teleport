@@ -1,4 +1,5 @@
 import Combine
+import ServiceManagement
 import SwiftUI
 import TeleportCore
 
@@ -7,9 +8,10 @@ struct HostView: View {
     @ObservedObject var app: AppModel
     @ObservedObject var host: HostController
     @Local private var showAddApp = false
-    @Local private var now = Date()
     @Local private var loginNotice: String?
-    private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @Local private var loginStatus: SMAppService.Status = .notRegistered
+    /// Picks up permissions granted in System Settings; the checks run off the main thread.
+    private let permissionPoll = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -26,7 +28,14 @@ struct HostView: View {
                 .padding(20)
             }
         }
-        .onReceive(tick) { now = $0 }
+        .onReceive(permissionPoll) { _ in
+            if !host.hasScreenRecording || !host.hasAccessibility { host.refreshPermissions() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            host.refreshPermissions()
+            refreshLoginStatus()
+        }
+        .onAppear { refreshLoginStatus() }
         .sheet(item: Binding(get: { host.pendingApproval }, set: { _ in })) { pending in
             AllowSheet(host: host, pending: pending)
         }
@@ -104,18 +113,9 @@ struct HostView: View {
     private var pairingCard: some View {
         Card(title: "Pair a Mac", subtitle: "On the other Mac, press Pair a new Mac and type this code.") {
             if let pairing = host.pairingCode {
-                let left = max(0, pairing.expires.timeIntervalSince(now))
                 HStack(spacing: 24) {
                     CodeDisplay(code: pairing.code)
-                    ZStack {
-                        Circle().stroke(Color.primary.opacity(0.08), lineWidth: 5)
-                        Circle().trim(from: 0, to: left / 120)
-                            .stroke(Theme.remote, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                            .animation(.linear(duration: 1), value: left)
-                        Text("\(Int(left))").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    }
-                    .frame(width: 48, height: 48)
+                    PairingCountdown(expires: pairing.expires)
                     VStack(alignment: .leading, spacing: 6) {
                         Text(host.pendingApproval == nil ? "Waiting for the other Mac…" : "A Mac is asking. Check the code.")
                             .font(.callout).foregroundStyle(Theme.remote)
@@ -164,8 +164,8 @@ struct HostView: View {
     private func lastSeen(_ device: TrustedDevice) -> String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
-        if let seen = device.lastSeen { return "Last connected \(formatter.localizedString(for: seen, relativeTo: now))" }
-        return "Paired \(formatter.localizedString(for: device.pairedAt, relativeTo: now))"
+        if let seen = device.lastSeen { return "Last connected \(formatter.localizedString(for: seen, relativeTo: Date()))" }
+        return "Paired \(formatter.localizedString(for: device.pairedAt, relativeTo: Date()))"
     }
 
     // MARK: - Apps
@@ -207,8 +207,9 @@ struct HostView: View {
 
     private var setupCard: some View {
         Card(title: "Keep it running") {
-            Toggle(isOn: Binding(get: { LoginItem.isEnabled || LoginItem.needsApproval }, set: { on in
+            Toggle(isOn: Binding(get: { loginStatus == .enabled || loginStatus == .requiresApproval }, set: { on in
                 loginNotice = LoginItem.set(on)
+                refreshLoginStatus()
             })) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Start Teleport when this Mac logs in")
@@ -216,10 +217,38 @@ struct HostView: View {
                 }
             }
             .toggleStyle(.switch)
-            if LoginItem.needsApproval {
+            if loginStatus == .requiresApproval {
                 Notice(text: "macOS wants you to confirm this under Login Items.", kind: .info, action: ("Open Login Items", { SystemSettings.openLoginItems() }))
             }
             if let loginNotice { Notice(text: loginNotice, kind: .error) }
+        }
+    }
+
+    /// SMAppService.status is an XPC round trip; never call it from `body`.
+    private func refreshLoginStatus() {
+        Task {
+            let status = await Task.detached(priority: .utility) { LoginItem.status }.value
+            if loginStatus != status { loginStatus = status }
+        }
+    }
+}
+
+/// The pairing code's remaining time. Ticks on its own so the rest of the window doesn't redraw every second.
+private struct PairingCountdown: View {
+    let expires: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let left = max(0, expires.timeIntervalSince(context.date))
+            ZStack {
+                Circle().stroke(Color.primary.opacity(0.08), lineWidth: 5)
+                Circle().trim(from: 0, to: left / 120)
+                    .stroke(Theme.remote, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.linear(duration: 1), value: left)
+                Text("\(Int(left))").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            .frame(width: 48, height: 48)
         }
     }
 }

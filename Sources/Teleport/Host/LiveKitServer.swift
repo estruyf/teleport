@@ -62,7 +62,15 @@ final class LiveKitServer {
         guard let process, process.isRunning else { return }
         process.terminationHandler = nil
         process.terminate()
-        process.waitUntilExit()
+        // On SIGTERM livekit drains until its rooms are empty, and our own participant is still
+        // in there; waiting without a limit hangs the quit. Give it a moment, then kill it.
+        let deadline = Date().addingTimeInterval(2)
+        while process.isRunning, Date() < deadline { usleep(50000) }
+        if process.isRunning {
+            Log.warn("livekit-server did not stop; killing it")
+            kill(process.processIdentifier, SIGKILL)
+            process.waitUntilExit()
+        }
         self.process = nil
         try? FileManager.default.removeItem(at: pidFile)
         Log.info("livekit-server stopped")

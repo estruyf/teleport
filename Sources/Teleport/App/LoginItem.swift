@@ -4,14 +4,8 @@ import TeleportCore
 
 /// Start Teleport at login (a host Mac should come back hosting after a reboot).
 enum LoginItem {
-    static var isEnabled: Bool {
-        SMAppService.mainApp.status == .enabled
-    }
-
-    /// True when macOS wants the user to confirm in System Settings > General > Login Items.
-    static var needsApproval: Bool {
-        SMAppService.mainApp.status == .requiresApproval
-    }
+    /// An XPC round trip to the system; call it off the main thread.
+    static var status: SMAppService.Status { SMAppService.mainApp.status }
 
     static func set(_ enabled: Bool) -> String? {
         do {
