@@ -45,7 +45,7 @@ enum ScreenSharingRelock {
 
     /// On unless the key is explicitly off; a missing key means on.
     static func isOn() -> Bool {
-        run("/usr/bin/defaults", ["read", domain, "RestoreMachineState"])?.trimmingCharacters(in: .whitespacesAndNewlines) != "0"
+        runTool("/usr/bin/defaults", ["read", domain, "RestoreMachineState"])?.trimmingCharacters(in: .whitespacesAndNewlines) != "0"
     }
 
     /// Changes it behind the macOS admin password prompt. False when cancelled or failed.
@@ -62,22 +62,42 @@ enum ScreenSharingRelock {
         with prompt "\(reason)" \
         with administrator privileges
         """
-        return run("/usr/bin/osascript", ["-e", script]) != nil
+        return runTool("/usr/bin/osascript", ["-e", script]) != nil
     }
+}
 
-    /// Output on a zero exit, nil otherwise. Blocks; call it off the main thread.
-    private static func run(_ path: String, _ arguments: [String]) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = arguments
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let output = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return process.terminationStatus == 0 ? String(decoding: output, as: UTF8.self) : nil
+/// How this Mac gets signed in after a restart. Teleport only runs once someone is signed in.
+struct SignInSetup: Equatable {
+    /// The account macOS signs in by itself after a restart. FileVault rules this out.
+    var autoLoginUser: String?
+    /// A restart first waits at the disk password, which Screen Sharing can't reach.
+    var fileVault: Bool
+    /// See `ScreenSharingRelock`; only matters when someone signs in through Screen Sharing.
+    var relocks: Bool
+
+    var signsInByItself: Bool { autoLoginUser == NSUserName() }
+
+    /// Starts three short processes; call it off the main thread.
+    static func current() -> SignInSetup {
+        let user = runTool("/usr/bin/defaults", ["read", "/Library/Preferences/com.apple.loginwindow", "autoLoginUser"])?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileVault = runTool("/usr/bin/fdesetup", ["isactive"])?.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+        return SignInSetup(autoLoginUser: user?.isEmpty == false ? user : nil, fileVault: fileVault, relocks: ScreenSharingRelock.isOn())
     }
+}
+
+/// Output on a zero exit, nil otherwise. Blocks; call it off the main thread.
+private func runTool(_ path: String, _ arguments: [String]) -> String? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: path)
+    process.arguments = arguments
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    do { try process.run() } catch { return nil }
+    let output = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return process.terminationStatus == 0 ? String(decoding: output, as: UTF8.self) : nil
 }
 
 struct InstalledApp: Identifiable, Hashable {

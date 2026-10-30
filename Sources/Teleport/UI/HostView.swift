@@ -33,11 +33,11 @@ struct HostView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             host.refreshPermissions()
-            host.refreshScreenSharingRelock()
+            host.refreshSignIn()
             refreshLoginStatus()
         }
         .onAppear {
-            host.refreshScreenSharingRelock()
+            host.refreshSignIn()
             refreshLoginStatus()
         }
         .sheet(item: Binding(get: { host.pendingApproval }, set: { _ in })) { pending in
@@ -105,10 +105,6 @@ struct HostView: View {
         if !host.hasAccessibility {
             Notice(text: "Accessibility is off. Viewers can see windows but not click or type.", kind: .warning,
                    action: ("Open System Settings", { SystemSettings.open("Privacy_Accessibility") }))
-        }
-        if host.relocksAfterScreenSharing {
-            Notice(text: "When you close Screen Sharing, macOS locks this Mac again if it was locked when you connected. Viewers can't type into a locked Mac.", kind: .warning,
-                   action: ("Keep unlocked…", { host.setScreenSharingRelock(false) }))
         }
         if host.livekitMissing {
             Notice(text: "The streaming server (livekit-server) is missing. Rebuild the app with it bundled, or install it with Homebrew: brew install livekit.", kind: .error,
@@ -225,19 +221,43 @@ struct HostView: View {
                 }
             }
             .toggleStyle(.switch)
-            Toggle(isOn: Binding(get: { !host.relocksAfterScreenSharing }, set: { keepUnlocked in
-                host.setScreenSharingRelock(!keepUnlocked)
-            })) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Stay unlocked after Screen Sharing")
-                    Text("Off is the macOS default: closing Screen Sharing locks this Mac again if it was locked. Asks for an admin password.").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .toggleStyle(.switch)
             if loginStatus == .requiresApproval {
                 Notice(text: "macOS wants you to confirm this under Login Items.", kind: .info, action: ("Open Login Items", { SystemSettings.openLoginItems() }))
             }
             if let loginNotice { Notice(text: loginNotice, kind: .error) }
+            if let signIn = host.signIn {
+                Divider()
+                afterRestart(signIn)
+            }
+        }
+    }
+
+    /// Teleport only runs once someone is signed in, and can't sign in itself. Shows the one way that applies here.
+    @ViewBuilder private func afterRestart(_ signIn: SignInSetup) -> some View {
+        Text("After a restart").font(.headline)
+        if signIn.signsInByItself {
+            Notice(text: "This Mac signs in as you by itself, so Teleport starts hosting on its own.", kind: .success)
+        } else if signIn.fileVault {
+            Notice(text: "FileVault is on, so a restart stops at this Mac's password before macOS starts, and Screen Sharing can't reach that screen. Someone at the Mac has to type it, or restart with sudo fdesetup authrestart, which skips it once. Then sign in through Screen Sharing.", kind: .warning)
+        } else if let other = signIn.autoLoginUser {
+            Notice(text: "This Mac signs in as \(other) by itself, not as you, and Teleport only runs for whoever is signed in. Switch automatic login to your account.", kind: .warning,
+                   action: ("Open Users & Groups", { SystemSettings.openUsersAndGroups() }))
+        } else {
+            Notice(text: "Nobody is signed in after a restart, so Teleport waits. Turn on automatic login so it comes back on its own, or sign in through Screen Sharing each time.", kind: .info,
+                   action: ("Open Users & Groups", { SystemSettings.openUsersAndGroups() }))
+        }
+        // Also shown after an earlier opt-in on a Mac that signs in by itself, so it can be undone.
+        if !signIn.signsInByItself || !signIn.relocks {
+            Toggle(isOn: Binding(get: { !signIn.relocks }, set: { keepUnlocked in
+                host.setScreenSharingRelock(!keepUnlocked)
+            })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Stay unlocked after Screen Sharing")
+                    Text("Needed when you sign in through Screen Sharing: otherwise closing it locks this Mac again, and viewers can't type into a locked Mac. Switching it off takes effect the next time this Mac locks. Asks for an admin password.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
         }
     }
 

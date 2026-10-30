@@ -430,6 +430,10 @@ enum SystemSettings {
     static func openLoginItems() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
     }
+
+    static func openUsersAndGroups() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Users-Groups-Settings.extension")!)
+    }
 }
 
 /// Per-view local state without SwiftUI's `@State` macro, whose compiler plugin the
