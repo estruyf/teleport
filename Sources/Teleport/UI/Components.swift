@@ -87,6 +87,8 @@ struct BeamBackdrop: View {
 struct Card<Content: View>: View {
     var title: String?
     var subtitle: String?
+    /// Stretch to the height on offer, so cards in one grid row line up.
+    var fillHeight = false
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -100,7 +102,7 @@ struct Card<Content: View>: View {
             content
         }
         .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: fillHeight ? .infinity : nil, alignment: .topLeading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
     }

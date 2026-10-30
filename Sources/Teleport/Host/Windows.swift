@@ -94,7 +94,13 @@ enum WindowCatalog {
     }
 
     static func find(_ id: CGWindowID) async throws -> (SCWindow, SCDisplay) {
-        let content = try await ShareableContent.shared.fetch()
+        var content = try await ShareableContent.shared.fetch()
+        // A window that just opened can take ScreenCaptureKit a moment to list.
+        for _ in 0 ..< 6 where !content.windows.contains(where: { $0.windowID == id }) {
+            guard WindowCatalog.currentFrame(of: id) != nil else { break }
+            try await Task.sleep(nanoseconds: 500_000_000)
+            content = try await ShareableContent.shared.fetch()
+        }
         guard let window = content.windows.first(where: { $0.windowID == id }) else {
             throw HostError("window \(id) is not on screen")
         }

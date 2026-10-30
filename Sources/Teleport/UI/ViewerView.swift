@@ -129,7 +129,7 @@ struct ViewerView: View {
                                    detail: "On \(viewer.current?.name ?? "the host"), add apps under Shared apps. They appear here right away.")
                     } else {
                         Text("Apps on \(viewer.current?.name ?? "the host")").font(.title3.weight(.semibold))
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12)], alignment: .leading, spacing: 12) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
                             ForEach(viewer.apps) { remoteApp in
                                 RemoteAppCard(app: remoteApp, icon: viewer.icons[remoteApp.bundleID], busy: viewer.busy) { newWindow in
                                     Task { await viewer.launch(remoteApp, newWindow: newWindow) }
@@ -184,7 +184,7 @@ private struct RemoteAppCard: View {
     @Local private var confirmForceQuit = false
 
     var body: some View {
-        Card {
+        Card(fillHeight: true) {
             HStack(spacing: 12) {
                 AppIconView(image: icon, size: 48).shadow(color: .black.opacity(0.2), radius: 4, y: 2)
                 VStack(alignment: .leading, spacing: 2) {
@@ -211,15 +211,25 @@ private struct RemoteAppCard: View {
                     .help("Quit \(app.name) on the host")
                 }
             }
-            if !app.windows.isEmpty {
-                Divider()
-                VStack(spacing: 2) {
+            Divider()
+            VStack(spacing: 2) {
+                if app.windows.isEmpty {
+                    // Same shape as a window row, so every card keeps one height.
+                    HStack {
+                        Image(systemName: "macwindow")
+                        Text("No open windows")
+                        Spacer()
+                    }
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                } else {
                     ForEach(app.windows) { window in
                         WindowRow(window: window) { open(window) }
                     }
                 }
-                .padding(.horizontal, -8)
             }
+            .padding(.horizontal, -8)
         }
         .confirmationDialog("Force quit \(app.name) on the host?", isPresented: $confirmForceQuit) {
             Button("Force Quit", role: .destructive) { quit(true) }
