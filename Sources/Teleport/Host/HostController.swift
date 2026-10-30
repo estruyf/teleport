@@ -34,6 +34,8 @@ final class HostController: NSObject, ObservableObject {
     @Published private(set) var installedApps: [InstalledApp] = []
     @Published private(set) var hasScreenRecording = CGPreflightScreenCaptureAccess()
     @Published private(set) var hasAccessibility = AXIsProcessTrusted()
+    /// Ending a Screen Sharing session locks this Mac again if it was locked when the session began.
+    @Published private(set) var relocksAfterScreenSharing = false
     /// livekit-server could not be found when starting.
     @Published private(set) var livekitMissing = false
     @Published var config: TeleportConfig {
@@ -213,6 +215,22 @@ final class HostController: NSObject, ObservableObject {
             let screen = CGPreflightScreenCaptureAccess()
             let accessibility = AXIsProcessTrusted()
             await self?.applyPermissions(screen: screen, accessibility: accessibility)
+        }
+    }
+
+    func refreshScreenSharingRelock() {
+        Task.detached(priority: .utility) { [weak self] in
+            let on = ScreenSharingRelock.isOn()
+            await MainActor.run { self?.relocksAfterScreenSharing = on }
+        }
+    }
+
+    /// Asks for an admin password, then turns the relock off.
+    func stopScreenSharingRelock() {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            if ScreenSharingRelock.turnOff() { Log.info("Screen Sharing no longer relocks this Mac") }
+            let on = ScreenSharingRelock.isOn()
+            await MainActor.run { self?.relocksAfterScreenSharing = on }
         }
     }
 

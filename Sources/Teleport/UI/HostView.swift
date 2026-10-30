@@ -33,9 +33,13 @@ struct HostView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             host.refreshPermissions()
+            host.refreshScreenSharingRelock()
             refreshLoginStatus()
         }
-        .onAppear { refreshLoginStatus() }
+        .onAppear {
+            host.refreshScreenSharingRelock()
+            refreshLoginStatus()
+        }
         .sheet(item: Binding(get: { host.pendingApproval }, set: { _ in })) { pending in
             AllowSheet(host: host, pending: pending)
         }
@@ -101,6 +105,10 @@ struct HostView: View {
         if !host.hasAccessibility {
             Notice(text: "Accessibility is off. Viewers can see windows but not click or type.", kind: .warning,
                    action: ("Open System Settings", { SystemSettings.open("Privacy_Accessibility") }))
+        }
+        if host.relocksAfterScreenSharing {
+            Notice(text: "When you close Screen Sharing, macOS locks this Mac again if it was locked when you connected. Viewers can't type into a locked Mac.", kind: .warning,
+                   action: ("Keep unlocked…", { host.stopScreenSharingRelock() }))
         }
         if host.livekitMissing {
             Notice(text: "The streaming server (livekit-server) is missing. Rebuild the app with it bundled, or install it with Homebrew: brew install livekit.", kind: .error,

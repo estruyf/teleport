@@ -37,6 +37,42 @@ enum ScreenLock {
     }
 }
 
+/// Screen Sharing puts the Mac back the way it found it: connect to a locked Mac and it locks
+/// again when the session ends. `RestoreMachineState` off keeps it unlocked. Apple doesn't
+/// document the key; it's what admins use for classroom and kiosk Macs.
+enum ScreenSharingRelock {
+    private static let domain = "/Library/Preferences/com.apple.RemoteManagement"
+
+    /// On unless the key is explicitly off; a missing key means on.
+    static func isOn() -> Bool {
+        run("/usr/bin/defaults", ["read", domain, "RestoreMachineState"])?.trimmingCharacters(in: .whitespacesAndNewlines) != "0"
+    }
+
+    /// Turns it off behind the macOS admin password prompt. False when cancelled or failed.
+    static func turnOff() -> Bool {
+        let script = """
+        do shell script "/usr/bin/defaults write \(domain) RestoreMachineState -bool NO" \
+        with prompt "Teleport wants to keep this Mac unlocked when a Screen Sharing session ends." \
+        with administrator privileges
+        """
+        return run("/usr/bin/osascript", ["-e", script]) != nil
+    }
+
+    /// Output on a zero exit, nil otherwise. Blocks; call it off the main thread.
+    private static func run(_ path: String, _ arguments: [String]) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return process.terminationStatus == 0 ? String(decoding: output, as: UTF8.self) : nil
+    }
+}
+
 struct InstalledApp: Identifiable, Hashable {
     let bundleID: String
     let name: String
