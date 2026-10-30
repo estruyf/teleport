@@ -1,5 +1,18 @@
+# SwiftPM
 .build/
 .swiftpm/
+
+# Xcode
 *.xcodeproj
-.DS_Store
+xcuserdata/
+DerivedData/
+
+# Bundled app and release zips (scripts/bundle.sh, scripts/release.sh)
+build/
 dist/
+
+# Node (npm scripts only)
+node_modules/
+
+# macOS
+.DS_Store

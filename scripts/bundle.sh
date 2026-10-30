@@ -17,11 +17,16 @@ swift build -c "$CONFIG" 2>&1 | grep -E "error:|Build complete" || true
 [ -x "$BIN/Teleport" ] || { echo "build failed"; exit 1; }
 
 rm -rf "$APP"
+# Never leave a half-built bundle behind: an unsigned app installed by mistake gets no
+# Screen Recording or Accessibility grants, however often they are switched on.
+trap '[ $? -eq 0 ] || { rm -rf "$APP"; echo "bundle failed; removed $APP" >&2; }' EXIT
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
 cp "$BIN/Teleport" "$BIN/TeleportDockTile" "$APP/Contents/MacOS/"
 # SwiftPM's LiveKit frameworks (xcframework slices) and resource bundles live beside the binary.
+# The resource bundles go in Resources: codesign rejects them in MacOS. Nothing loads them
+# through Bundle.module (LiveKit's only holds its privacy manifest).
 for fw in "$BIN"/*.framework; do [ -d "$fw" ] && cp -R "$fw" "$APP/Contents/Frameworks/"; done
-for rb in "$BIN"/*.bundle; do [ -d "$rb" ] && cp -R "$rb" "$APP/Contents/MacOS/"; done
+for rb in "$BIN"/*.bundle; do [ -d "$rb" ] && cp -R "$rb" "$APP/Contents/Resources/"; done
 # livekit-server: LiveKit ships macOS builds only through Homebrew. Take the bottle for this
 # arch, and the other arch's bottle when brew can fetch it, so the bundle runs on both kinds of Mac.
 LIVEKIT_VERSION="1.13.11"
@@ -92,7 +97,7 @@ if [ -n "$IDENTITY" ]; then
   codesign --force --deep --options runtime --entitlements "$ROOT/scripts/entitlements.plist" --sign "$IDENTITY" "$APP"
   echo "signed as $IDENTITY"
 else
-  codesign --force --deep --sign - "$APP" 2>/dev/null
+  codesign --force --deep --sign - "$APP"
   echo "signed ad hoc (grants reset on every rebuild)"
 fi
 echo "built $APP ($CONFIG, $VERSION)"
