@@ -390,6 +390,13 @@ final class HostController: NSObject, ObservableObject {
                 return try await AppCatalog.launch(request, allowedApps: self.config.allowedApps, injector: self.injector).jsonString()
             }
         }
+        try await room.registerRpcMethod(RPCMethod.quit) { [weak self] data in
+            await RPCReply.wrap {
+                guard let self else { throw HostError("host is shutting down") }
+                let request = try QuitRequest.fromJSON(data.payload)
+                return try await AppCatalog.quit(request, allowedApps: self.config.allowedApps).jsonString()
+            }
+        }
         try await room.registerRpcMethod(RPCMethod.icon) { data in
             await RPCReply.wrap {
                 let request = try IconRequest.fromJSON(data.payload)

@@ -57,6 +57,24 @@ enum AppCatalog {
         return LaunchResponse(windows: [])
     }
 
+    /// Quits every instance of the app and waits up to 5 s for it to go.
+    static func quit(_ request: QuitRequest, allowedApps: [String]) async throws -> QuitResponse {
+        guard allowedApps.contains(request.bundleID) else {
+            throw HostError("\(request.bundleID) is not in allowedApps")
+        }
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: request.bundleID)
+        for app in running {
+            _ = request.force ? app.forceTerminate() : app.terminate()
+        }
+        for _ in 0 ..< 20 {
+            if running.allSatisfy(\.isTerminated) { break }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        let quit = running.allSatisfy(\.isTerminated)
+        Log.info("\(request.force ? "force quit" : "quit") \(request.bundleID): \(quit ? "done" : "still running")")
+        return QuitResponse(quit: quit)
+    }
+
     /// PNG icon shrunk until it fits a 15 KB RPC reply.
     static func icon(bundleID: String) throws -> IconResponse {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {

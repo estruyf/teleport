@@ -135,6 +135,8 @@ struct ViewerView: View {
                                     Task { await viewer.launch(remoteApp, newWindow: newWindow) }
                                 } open: { window in
                                     Task { await viewer.open(window) }
+                                } quit: { force in
+                                    Task { await viewer.quit(remoteApp, force: force) }
                                 }
                             }
                         }
@@ -178,6 +180,8 @@ private struct RemoteAppCard: View {
     let busy: Bool
     let launch: (_ newWindow: Bool) -> Void
     let open: (WindowInfo) -> Void
+    let quit: (_ force: Bool) -> Void
+    @Local private var confirmForceQuit = false
 
     var body: some View {
         Card {
@@ -195,6 +199,17 @@ private struct RemoteAppCard: View {
                 Button(app.running ? "New window" : "Launch") { launch(app.running) }
                     .controlSize(.small)
                     .disabled(busy)
+                if app.running {
+                    Menu("Quit") {
+                        Button("Force Quit…") { confirmForceQuit = true }
+                    } primaryAction: {
+                        quit(false)
+                    }
+                    .controlSize(.small)
+                    .fixedSize()
+                    .disabled(busy)
+                    .help("Quit \(app.name) on the host")
+                }
             }
             if !app.windows.isEmpty {
                 Divider()
@@ -205,6 +220,11 @@ private struct RemoteAppCard: View {
                 }
                 .padding(.horizontal, -8)
             }
+        }
+        .confirmationDialog("Force quit \(app.name) on the host?", isPresented: $confirmForceQuit) {
+            Button("Force Quit", role: .destructive) { quit(true) }
+        } message: {
+            Text("Unsaved changes in \(app.name) are lost.")
         }
     }
 }

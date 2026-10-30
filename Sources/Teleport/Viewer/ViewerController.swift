@@ -250,6 +250,24 @@ final class ViewerController: NSObject, ObservableObject {
         }
     }
 
+    /// Quits the app on the host; its portals close as its windows go.
+    func quit(_ app: AppInfo, force: Bool) async {
+        busy = true
+        defer { busy = false }
+        notice = nil
+        do {
+            let request = QuitRequest(bundleID: app.bundleID, force: force)
+            let reply = try await rpc(RPCMethod.quit, try request.jsonString(), timeout: 15)
+            let response = try RPCReply.decode(QuitResponse.self, from: reply)
+            if !response.quit {
+                notice = "\(app.name) is still running. It may be asking to save changes: open its window to answer, or use Force Quit."
+            }
+            await refresh()
+        } catch {
+            notice = "Could not quit \(app.name): \(Self.friendly(error, host: current))"
+        }
+    }
+
     /// Dock tile clicked: bring that app's portals forward, or open one if none is open.
     func focusApp(_ bundleID: String) {
         NSApp.activate(ignoringOtherApps: true)

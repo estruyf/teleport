@@ -140,6 +140,7 @@ public extension RPCMethod {
     static let apps = "teleport.apps"
     static let launch = "teleport.launch"
     static let icon = "teleport.icon"
+    static let quit = "teleport.quit"
 }
 
 /// An app the host may share: installed, possibly running, with its current windows.
@@ -173,6 +174,22 @@ public struct LaunchRequest: Codable {
 public struct LaunchResponse: Codable {
     public var windows: [WindowInfo]
     public init(windows: [WindowInfo]) { self.windows = windows }
+}
+
+public struct QuitRequest: Codable {
+    public var bundleID: String
+    /// Kill it instead of asking; unsaved changes are lost.
+    public var force: Bool
+    public init(bundleID: String, force: Bool) {
+        self.bundleID = bundleID
+        self.force = force
+    }
+}
+
+/// False when the app is still running, usually because it asks to save changes.
+public struct QuitResponse: Codable {
+    public var quit: Bool
+    public init(quit: Bool) { self.quit = quit }
 }
 
 public struct IconRequest: Codable {
