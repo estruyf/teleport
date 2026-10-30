@@ -56,7 +56,7 @@ final class Portal: NSObject {
         scale = CGFloat(filter.pointPixelScale)
         let stream = SCStream(filter: filter, configuration: makeConfiguration(), delegate: output)
         try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: output.queue)
-        try await stream.startCapture()
+        try await stream.start()
         self.stream = stream
         // WebRTC needs a frame to size the encoder before the track is published.
         try await output.waitForFirstFrame(timeout: 3)
@@ -77,7 +77,7 @@ final class Portal: NSObject {
     func close(room: Room) async {
         geometryTimer?.invalidate()
         geometryTimer = nil
-        try? await stream?.stopCapture()
+        try? await stream?.stop()
         stream = nil
         if let publication {
             try? await room.localParticipant.unpublish(publication: publication)
@@ -131,8 +131,8 @@ final class Portal: NSObject {
         display = newDisplay
         let filter = SCContentFilter(display: newDisplay, including: [app], exceptingWindows: [])
         scale = CGFloat(filter.pointPixelScale)
-        try? await stream?.updateContentFilter(filter)
-        try? await stream?.updateConfiguration(makeConfiguration())
+        try? await stream?.update(filter: filter)
+        try? await stream?.update(configuration: makeConfiguration())
     }
 
     private func makeConfiguration() -> SCStreamConfiguration {

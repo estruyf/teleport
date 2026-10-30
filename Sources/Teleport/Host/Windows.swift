@@ -5,11 +5,58 @@ import ScreenCaptureKit
 import os
 import TeleportCore
 
-/// ScreenCaptureKit mixes up overlapping shareable-content requests and can call a completion
-/// handler it already released. That crashed the host right after a viewer paired, when the app
-/// list, window lookups and portal tracking all asked at once (EXC_BAD_ACCESS in
-/// CheckedContinuation.resume on replayd's XPC queue). So: one request at a time, and callers
-/// that arrive while one is running share its result.
+/// ScreenCaptureKit can call a completion handler twice. Swift's generated async wrappers
+/// (`try await stream.startCapture()` and friends) can't survive that: the second call resumes a
+/// continuation whose task already moved on, and the host dies with EXC_BAD_ACCESS in
+/// CheckedContinuation.resume on an SCK queue. Seen after pairing (shareable content) and when
+/// opening a portal (SCStream.startCapture). So every SCK call goes through the completion-handler
+/// API here, which keeps the first answer and drops the rest.
+func screenCaptureKit<T>(
+    _ what: String,
+    isolation _: isolated (any Actor)? = #isolation,
+    _ call: (@escaping @Sendable (Result<T, Error>) -> Void) -> Void
+) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        let answered = OSAllocatedUnfairLock(initialState: false)
+        call { result in
+            let first = answered.withLock { done in
+                defer { done = true }
+                return !done
+            }
+            guard first else {
+                Log.warn("ScreenCaptureKit answered \(what) twice; ignoring the second")
+                return
+            }
+            continuation.resume(with: result)
+        }
+    }
+}
+
+extension SCStream {
+    func start() async throws {
+        try await screenCaptureKit("startCapture") { done in startCapture { done($0.map(Result.failure) ?? .success(())) } }
+    }
+
+    func stop() async throws {
+        try await screenCaptureKit("stopCapture") { done in stopCapture { done($0.map(Result.failure) ?? .success(())) } }
+    }
+
+    func update(filter: SCContentFilter) async throws {
+        try await screenCaptureKit("updateContentFilter") { done in
+            updateContentFilter(filter) { done($0.map(Result.failure) ?? .success(())) }
+        }
+    }
+
+    func update(configuration: SCStreamConfiguration) async throws {
+        try await screenCaptureKit("updateConfiguration") { done in
+            updateConfiguration(configuration) { done($0.map(Result.failure) ?? .success(())) }
+        }
+    }
+}
+
+/// Overlapping shareable-content requests make the double answers above much more likely (the
+/// app list, window lookups and portal tracking all asked at once right after a viewer paired).
+/// So: one request at a time, and callers that arrive while one is running share its result.
 actor ShareableContent {
     static let shared = ShareableContent()
     private var pending: Task<SCShareableContent, Error>?
@@ -22,24 +69,10 @@ actor ShareableContent {
         return try await task.value
     }
 
-    /// The completion-handler API, so a handler called twice is ignored instead of resuming twice.
     private static func request() async throws -> SCShareableContent {
-        try await withCheckedThrowingContinuation { continuation in
-            let answered = OSAllocatedUnfairLock(initialState: false)
+        try await screenCaptureKit("a shareable-content request") { done in
             SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) { content, error in
-                let first = answered.withLock { done in
-                    defer { done = true }
-                    return !done
-                }
-                guard first else {
-                    Log.warn("ScreenCaptureKit answered a shareable-content request twice; ignoring the second")
-                    return
-                }
-                if let content {
-                    continuation.resume(returning: content)
-                } else {
-                    continuation.resume(throwing: error ?? HostError("ScreenCaptureKit returned no shareable content"))
-                }
+                done(content.map(Result.success) ?? .failure(error ?? HostError("ScreenCaptureKit returned no shareable content")))
             }
         }
     }
