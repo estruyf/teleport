@@ -124,7 +124,7 @@ final class StatusBar: NSObject, NSMenuDelegate {
                     menu.addItem(disabled("No paired Mac"))
                 }
                 for host in viewer.hosts {
-                    let entry = NSMenuItem(title: "Teleport to \(host.name)", action: #selector(connect(_:)), keyEquivalent: "")
+                    let entry = NSMenuItem(title: "Open portal for \(host.name)", action: #selector(connect(_:)), keyEquivalent: "")
                     entry.target = self
                     entry.representedObject = host.publicKey
                     menu.addItem(entry)

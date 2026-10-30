@@ -48,11 +48,18 @@ enum ScreenSharingRelock {
         run("/usr/bin/defaults", ["read", domain, "RestoreMachineState"])?.trimmingCharacters(in: .whitespacesAndNewlines) != "0"
     }
 
-    /// Turns it off behind the macOS admin password prompt. False when cancelled or failed.
-    static func turnOff() -> Bool {
+    /// Changes it behind the macOS admin password prompt. False when cancelled or failed.
+    /// Turning it back on deletes the key, which is how macOS ships.
+    static func set(_ on: Bool) -> Bool {
+        let command = on
+            ? "/usr/bin/defaults delete \(domain) RestoreMachineState || true"
+            : "/usr/bin/defaults write \(domain) RestoreMachineState -bool NO"
+        let reason = on
+            ? "Teleport wants to let Screen Sharing lock this Mac again when a session ends."
+            : "Teleport wants to keep this Mac unlocked when a Screen Sharing session ends."
         let script = """
-        do shell script "/usr/bin/defaults write \(domain) RestoreMachineState -bool NO" \
-        with prompt "Teleport wants to keep this Mac unlocked when a Screen Sharing session ends." \
+        do shell script "\(command)" \
+        with prompt "\(reason)" \
         with administrator privileges
         """
         return run("/usr/bin/osascript", ["-e", script]) != nil

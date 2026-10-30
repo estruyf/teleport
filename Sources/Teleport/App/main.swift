@@ -49,15 +49,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard model.isRunning else { return .terminateNow }
         guard !quitting else { return .terminateLater }
         quitting = true
+        // Logout, restart and shutdown carry a quit reason; those mustn't wait on a dialog.
+        let systemQuit = NSAppleEventManager.shared().currentAppleEvent?.attributeDescriptor(forKeyword: kAEQuitReason) != nil
         Task {
+            if model.host != nil, !systemQuit { await offerToRelock() }
+            // A disconnect that never returns must not keep the app alive; terminate() cleans up what's left.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                NSApp.reply(toApplicationShouldTerminate: true)
+            }
             await model.shutdown(message: "Stopping services and quitting…")
             NSApp.reply(toApplicationShouldTerminate: true)
         }
-        // A disconnect that never returns must not keep the app alive; terminate() cleans up what's left.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
-            NSApp.reply(toApplicationShouldTerminate: true)
-        }
         return .terminateLater
+    }
+
+    private static let skipRelockOffer = "skipRelockOfferOnQuit"
+
+    /// Keeping the Mac unlocked is a macOS setting that outlives Teleport; offer to undo it on the way out.
+    private func offerToRelock() async {
+        guard !UserDefaults.standard.bool(forKey: Self.skipRelockOffer) else { return }
+        guard await Task.detached(priority: .userInitiated, operation: { !ScreenSharingRelock.isOn() }).value else { return }
+        let alert = NSAlert()
+        alert.messageText = "Turn off “Stay unlocked after Screen Sharing”?"
+        alert.informativeText = "This macOS setting stays on after Teleport quits, so closing Screen Sharing won't lock this Mac again. Leave it on if this Mac will keep hosting."
+        alert.addButton(withTitle: "Turn Off…")
+        alert.addButton(withTitle: "Leave On")
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = "Don't ask again"
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        if alert.suppressionButton?.state == .on { UserDefaults.standard.set(true, forKey: Self.skipRelockOffer) }
+        guard response == .alertFirstButtonReturn else { return }
+        if await Task.detached(priority: .userInitiated, operation: { ScreenSharingRelock.set(true) }).value {
+            Log.info("Screen Sharing relocks this Mac again")
+        }
     }
 
     func applicationWillTerminate(_: Notification) {

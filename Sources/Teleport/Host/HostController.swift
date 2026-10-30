@@ -225,10 +225,10 @@ final class HostController: NSObject, ObservableObject {
         }
     }
 
-    /// Asks for an admin password, then turns the relock off.
-    func stopScreenSharingRelock() {
+    /// Asks for an admin password, then turns the relock on or off.
+    func setScreenSharingRelock(_ on: Bool) {
         Task.detached(priority: .userInitiated) { [weak self] in
-            if ScreenSharingRelock.turnOff() { Log.info("Screen Sharing no longer relocks this Mac") }
+            if ScreenSharingRelock.set(on) { Log.info(on ? "Screen Sharing relocks this Mac again" : "Screen Sharing no longer relocks this Mac") }
             let on = ScreenSharingRelock.isOn()
             await MainActor.run { self?.relocksAfterScreenSharing = on }
         }

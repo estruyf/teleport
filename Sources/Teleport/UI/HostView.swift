@@ -108,7 +108,7 @@ struct HostView: View {
         }
         if host.relocksAfterScreenSharing {
             Notice(text: "When you close Screen Sharing, macOS locks this Mac again if it was locked when you connected. Viewers can't type into a locked Mac.", kind: .warning,
-                   action: ("Keep unlocked…", { host.stopScreenSharingRelock() }))
+                   action: ("Keep unlocked…", { host.setScreenSharingRelock(false) }))
         }
         if host.livekitMissing {
             Notice(text: "The streaming server (livekit-server) is missing. Rebuild the app with it bundled, or install it with Homebrew: brew install livekit.", kind: .error,
@@ -183,7 +183,7 @@ struct HostView: View {
     }
 
     private var appsCard: some View {
-        Card(title: "Shared apps", subtitle: "Viewers only see and open windows of these apps. Everything else stays private.") {
+        Card(title: "Apps to teleport", subtitle: "Viewers only see and open windows of these apps. Everything else stays private.") {
             if sharedApps.isEmpty {
                 EmptyState(icon: "square.grid.2x2", title: "Nothing shared yet", detail: "Add the apps your other Macs may use.")
             } else {
@@ -222,6 +222,15 @@ struct HostView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Start Teleport when this Mac logs in")
                     Text("So a reboot of the office Mac comes back hosting on its own.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+            Toggle(isOn: Binding(get: { !host.relocksAfterScreenSharing }, set: { keepUnlocked in
+                host.setScreenSharingRelock(!keepUnlocked)
+            })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Stay unlocked after Screen Sharing")
+                    Text("Off is the macOS default: closing Screen Sharing locks this Mac again if it was locked. Asks for an admin password.").font(.caption).foregroundStyle(.secondary)
                 }
             }
             .toggleStyle(.switch)

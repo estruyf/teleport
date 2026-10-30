@@ -92,8 +92,8 @@ struct ViewerView: View {
     private func connectingView(_ name: String) -> some View {
         VStack(spacing: 18) {
             PortalRing(mood: .busy, size: 150)
-            Text("Teleporting to \(name)…").font(.title2.weight(.semibold))
-            Text(viewer.notice ?? "Opening the portal.").font(.callout).foregroundStyle(.secondary)
+            Text("Opening portal for \(name)…").font(.title2.weight(.semibold))
+            Text(viewer.notice ?? "Connecting to \(name).").font(.callout).foregroundStyle(.secondary)
             Button("Cancel") { Task { await viewer.disconnect() } }.controlSize(.small)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -126,7 +126,7 @@ struct ViewerView: View {
                     if let notice = viewer.notice { Notice(text: notice, kind: notice.hasPrefix("Could not") ? .error : .info) }
                     if viewer.apps.isEmpty {
                         EmptyState(icon: "square.grid.2x2", title: "Nothing shared yet",
-                                   detail: "On \(viewer.current?.name ?? "the host"), add apps under Shared apps. They appear here right away.")
+                                   detail: "On \(viewer.current?.name ?? "the host"), add apps under Apps to teleport. They appear here right away.")
                     } else {
                         Text("Apps on \(viewer.current?.name ?? "the host")").font(.title3.weight(.semibold))
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
@@ -167,7 +167,7 @@ private struct HostRow: View {
                 }
                 Spacer()
                 Button("Forget", role: .destructive, action: forget).controlSize(.small)
-                Button(action: connect) { Label("Teleport", systemImage: "arrow.up.forward.app") }.primaryAction()
+                Button(action: connect) { Label("Open portal", systemImage: "arrow.up.forward.app") }.primaryAction()
             }
         }
         .hoverOutline()
