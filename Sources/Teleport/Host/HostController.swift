@@ -73,7 +73,8 @@ final class HostController: NSObject, ObservableObject {
             checkPermissions()
             refreshPermissions()
             addresses = NetworkAddresses.current()
-            installedApps = InstalledApps.scan()
+            // Opens every app bundle in /Applications; keep that off the main thread.
+            installedApps = await Task.detached(priority: .userInitiated) { InstalledApps.scan() }.value
 
             // Nobody sits at this Mac; keep it awake while hosting.
             activity = ProcessInfo.processInfo.beginActivity(
@@ -127,8 +128,9 @@ final class HostController: NSObject, ObservableObject {
         await room.disconnect()
         control?.stop()
         control = nil
-        server?.stop()
-        server = nil
+        let server = self.server
+        self.server = nil
+        await server?.stopInBackground()
         state = .stopped
     }
 

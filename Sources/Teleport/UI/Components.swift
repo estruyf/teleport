@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Colours and building blocks shared by every screen.
 /// Violet is the teleport colour: anything on another Mac, and the portal itself.
@@ -241,34 +242,119 @@ struct CodeDisplay: View {
     }
 }
 
-/// Six boxes for typing a code; one text field underneath does the work.
+/// Six boxes for typing a code. Click a box to select it and type to overwrite it; Delete clears
+/// the selected box, or the one just typed; the arrows move; ⌘V pastes a whole code.
+/// Boxes are fixed slots, so clearing one never shifts the digits after it.
 struct CodeEntry: View {
+    static let length = 6
     @Binding var code: String
-    @Local private var focused = false
+    var focused: FocusState<Bool>.Binding
+    /// Kept here rather than read back from `code`: that only catches up on the next render,
+    /// so keys pressed in quick succession would each see the old value and drop digits.
+    @Local private var slots = [Character?](repeating: nil, count: CodeEntry.length)
+    /// The box typing goes into; `length` means past the last box.
+    @Local private var cursor = 0
+    /// The box was clicked or arrowed to, so Delete clears it instead of the one before.
+    @Local private var picked = false
 
     var body: some View {
-        ZStack {
-            HStack(spacing: 10) {
-                ForEach(0 ..< 6, id: \.self) { index in
-                    if index == 3 { Spacer().frame(width: 8) }
-                    let digits = Array(code)
-                    Text(index < digits.count ? String(digits[index]) : "")
-                        .font(.system(size: 30, weight: .semibold, design: .rounded).monospacedDigit())
-                        .frame(width: 44, height: 56)
-                        .background(.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(index == code.count && focused ? Theme.remote : Color.primary.opacity(0.12), lineWidth: index == code.count && focused ? 2 : 1))
+        HStack(spacing: 10) {
+            ForEach(0 ..< Self.length, id: \.self) { index in
+                if index == 3 { Spacer().frame(width: 8) }
+                box(index)
+            }
+        }
+        .focusable(interactions: .edit)
+        .focusEffectDisabled()
+        .focused(focused)
+        .onKeyPress(phases: .down) { handle($0) }
+        .onPasteCommand(of: [.plainText]) { _ in
+            guard let text = NSPasteboard.general.string(forType: .string) else { return }
+            let digits = text.filter { $0.isASCII && $0.isNumber }.prefix(Self.length)
+            guard !digits.isEmpty else { return }
+            fill(String(digits))
+        }
+        .onAppear { fill(code) }
+        .onChange(of: code) { _, new in if new != joined { fill(new) } }
+        .onHover { inside in inside ? NSCursor.iBeam.push() : NSCursor.pop() }
+        .accessibilityElement()
+        .accessibilityLabel("Pairing code")
+        .accessibilityValue(code)
+    }
+
+    private var joined: String { String(slots.compactMap { $0 }) }
+
+    private func box(_ index: Int) -> some View {
+        let digit = slots[index]
+        let isSelected = focused.wrappedValue && index == cursor
+        return ZStack {
+            if let digit {
+                Text(String(digit))
+                    .font(.system(size: 30, weight: .semibold, design: .rounded).monospacedDigit())
+            } else if isSelected {
+                // A blinking caret, so it's obvious typing will land here.
+                TimelineView(.periodic(from: .now, by: 0.53)) { context in
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(Theme.remote)
+                        .frame(width: 2, height: 26)
+                        .opacity(Int(context.date.timeIntervalSinceReferenceDate / 0.53) % 2 == 0 ? 1 : 0)
                 }
             }
-            TextField("", text: Binding(get: { code }, set: { code = String($0.filter(\.isNumber).prefix(6)) }))
-                .textFieldStyle(.plain)
-                .font(.system(size: 1))
-                .foregroundStyle(.clear)
-                .tint(.clear)
-                .frame(width: 320, height: 56)
-                .onReceive(NotificationCenter.default.publisher(for: NSControl.textDidBeginEditingNotification)) { _ in focused = true }
-                .onReceive(NotificationCenter.default.publisher(for: NSControl.textDidEndEditingNotification)) { _ in focused = false }
         }
+        .frame(width: 44, height: 56)
+        .background(.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(isSelected && digit != nil ? Theme.remote.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(isSelected ? Theme.remote : Color.primary.opacity(0.12), lineWidth: isSelected ? 2 : 1))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            focused.wrappedValue = true
+            cursor = index
+            picked = true
+        }
+    }
+
+    private func handle(_ press: KeyPress) -> KeyPress.Result {
+        // ⌘V, ⌘W and friends belong to the menus; Return and Escape to the sheet's buttons.
+        guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+        switch press.key {
+        // Backspace arrives as U+007F, which SwiftUI matches to neither .delete nor .deleteForward.
+        case .delete, KeyEquivalent("\u{7F}"):
+            if picked, cursor < Self.length, slots[cursor] != nil {
+                slots[cursor] = nil
+            } else if cursor > 0 {
+                cursor -= 1
+                slots[cursor] = nil
+            }
+            picked = false
+        case .deleteForward:
+            if cursor < Self.length { slots[cursor] = nil }
+        case .leftArrow:
+            cursor = max(0, cursor - 1)
+            picked = true
+            return .handled
+        case .rightArrow:
+            cursor = min(Self.length - 1, cursor + 1)
+            picked = true
+            return .handled
+        default:
+            guard press.characters.count == 1, let digit = press.characters.first, digit.isASCII, digit.isNumber else { return .ignored }
+            guard cursor < Self.length else { return .handled }
+            slots[cursor] = digit
+            cursor += 1
+            picked = false
+        }
+        code = joined
+        return .handled
+    }
+
+    /// Replaces every box, from a paste or a code set from outside.
+    private func fill(_ digits: String) {
+        let digits = Array(digits.prefix(Self.length))
+        slots = (0 ..< Self.length).map { $0 < digits.count ? digits[$0] : nil }
+        cursor = digits.count
+        picked = false
+        code = joined
     }
 }
 
@@ -302,6 +388,24 @@ struct EmptyState: View {
             if let detail { Text(detail).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center) }
         }
         .frame(maxWidth: .infinity, minHeight: 160)
+    }
+}
+
+/// Covers the window, and swallows its clicks, while a mode switch or quit stops services.
+struct StoppingOverlay: View {
+    let message: String
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.regularMaterial)
+            VStack(spacing: 14) {
+                PortalRing(mood: .busy, size: 70)
+                Text(message).font(.headline)
+                Text("This takes a few seconds.").font(.callout).foregroundStyle(.secondary)
+            }
+        }
+        .contentShape(Rectangle())
+        .transition(.opacity)
     }
 }
 

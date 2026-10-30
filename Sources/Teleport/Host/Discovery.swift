@@ -105,15 +105,32 @@ final class HostBrowser: ObservableObject {
         publish()
     }
 
-    private func resolve(_ endpoint: NWEndpoint, name: String) {
-        let connection = NWConnection(to: endpoint, using: .tcp)
+    /// Prefers IPv4: Network.framework otherwise picks an IPv6 link-local address, which is
+    /// useless without its interface suffix and means nothing to the person reading it.
+    private func resolve(_ endpoint: NWEndpoint, name: String, ipv4Only: Bool = true) {
+        let parameters = NWParameters.tcp
+        if ipv4Only, let ip = parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            ip.version = .v4
+        }
+        let connection = NWConnection(to: endpoint, using: parameters)
         connection.stateUpdateHandler = { [weak self] state in
-            guard case .ready = state else {
-                if case .failed = state { connection.cancel() }
+            switch state {
+            case .ready: break
+            case .failed, .waiting:
+                connection.stateUpdateHandler = nil
+                connection.cancel()
+                // No IPv4 route to it (an IPv6-only network): take what there is.
+                if ipv4Only { Task { @MainActor in self?.resolve(endpoint, name: name, ipv4Only: false) } }
                 return
+            default: return
             }
             if case let .hostPort(host, _)? = connection.currentPath?.remoteEndpoint {
                 let address = "\(host)".components(separatedBy: "%").first ?? "\(host)"
+                // Link-local IPv6 can't be dialled without its scope; leave the field for the user.
+                guard !address.lowercased().hasPrefix("fe80:") else {
+                    connection.cancel()
+                    return
+                }
                 Task { @MainActor in
                     guard let self, var entry = self.lanHosts[name] else { return }
                     entry = DiscoveredHost(name: entry.name, address: address, port: entry.port, keyPrefix: entry.keyPrefix, source: .lan)

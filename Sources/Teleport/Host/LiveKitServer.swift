@@ -81,6 +81,16 @@ final class LiveKitServer {
         Log.info("livekit-server stopped")
     }
 
+    /// stop() can wait seconds for livekit to drain; do that wait on a background queue.
+    func stopInBackground() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                self.stop()
+                continuation.resume()
+            }
+        }
+    }
+
     private var pidFile: URL { TeleportConfig.directory.appendingPathComponent("livekit.pid") }
 
     /// A livekit-server left behind by a host that died would hold the ports, and it still has

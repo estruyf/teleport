@@ -223,6 +223,7 @@ private struct PairSheet: View {
     @Local private var address = ""
     @Local private var port = "7880"
     @Local private var code = ""
+    @FocusState private var codeFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -242,6 +243,7 @@ private struct PairSheet: View {
                             Button {
                                 address = found.address
                                 port = String(found.port)
+                                codeFocused = true
                             } label: {
                                 Label(found.name, systemImage: "macmini")
                             }
@@ -260,7 +262,7 @@ private struct PairSheet: View {
                     TextField("Port", text: $port).textFieldStyle(.roundedBorder).frame(width: 70)
                 }
                 Text("Pairing code").font(.caption).foregroundStyle(.secondary)
-                CodeEntry(code: $code)
+                CodeEntry(code: $code, focused: $codeFocused)
             }
 
             if let fingerprint = viewer.pairingFingerprint {
@@ -290,6 +292,9 @@ private struct PairSheet: View {
                 address = prefill.address
                 port = String(prefill.port)
             }
+            // With the address known, the code is the only thing left to type. Focus
+            // set while the sheet is still appearing gets lost, hence the hop.
+            if !address.isEmpty { DispatchQueue.main.async { codeFocused = true } }
         }
     }
 }

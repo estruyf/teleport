@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let model = AppModel()
     private var window: NSWindow?
     private var statusBar: StatusBar?
+    private var quitting = false
 
     func applicationDidFinishLaunching(_: Notification) {
         statusBar = StatusBar(app: model) { [weak self] in self?.showWindow() }
@@ -42,6 +43,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool { false }
+
+    /// Stop services before quitting, off the main thread, so the window shows that instead of a beachball.
+    func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
+        guard model.isRunning else { return .terminateNow }
+        guard !quitting else { return .terminateLater }
+        quitting = true
+        Task {
+            await model.shutdown(message: "Stopping services and quitting…")
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        // A disconnect that never returns must not keep the app alive; terminate() cleans up what's left.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
 
     func applicationWillTerminate(_: Notification) {
         model.terminate()

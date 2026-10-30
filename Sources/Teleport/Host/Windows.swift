@@ -2,12 +2,53 @@ import AppKit
 import ApplicationServices
 import CPrivate
 import ScreenCaptureKit
+import os
 import TeleportCore
+
+/// ScreenCaptureKit mixes up overlapping shareable-content requests and can call a completion
+/// handler it already released. That crashed the host right after a viewer paired, when the app
+/// list, window lookups and portal tracking all asked at once (EXC_BAD_ACCESS in
+/// CheckedContinuation.resume on replayd's XPC queue). So: one request at a time, and callers
+/// that arrive while one is running share its result.
+actor ShareableContent {
+    static let shared = ShareableContent()
+    private var pending: Task<SCShareableContent, Error>?
+
+    func fetch() async throws -> SCShareableContent {
+        if let pending { return try await pending.value }
+        let task = Task { try await Self.request() }
+        pending = task
+        defer { pending = nil }
+        return try await task.value
+    }
+
+    /// The completion-handler API, so a handler called twice is ignored instead of resuming twice.
+    private static func request() async throws -> SCShareableContent {
+        try await withCheckedThrowingContinuation { continuation in
+            let answered = OSAllocatedUnfairLock(initialState: false)
+            SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) { content, error in
+                let first = answered.withLock { done in
+                    defer { done = true }
+                    return !done
+                }
+                guard first else {
+                    Log.warn("ScreenCaptureKit answered a shareable-content request twice; ignoring the second")
+                    return
+                }
+                if let content {
+                    continuation.resume(returning: content)
+                } else {
+                    continuation.resume(throwing: error ?? HostError("ScreenCaptureKit returned no shareable content"))
+                }
+            }
+        }
+    }
+}
 
 /// Lists shareable windows and finds them again by ID.
 enum WindowCatalog {
     static func list(allowedApps: [String]) async throws -> [WindowInfo] {
-        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+        let content = try await ShareableContent.shared.fetch()
         let ownPID = ProcessInfo.processInfo.processIdentifier
         return content.windows
             .filter { window in
@@ -20,7 +61,7 @@ enum WindowCatalog {
     }
 
     static func find(_ id: CGWindowID) async throws -> (SCWindow, SCDisplay) {
-        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+        let content = try await ShareableContent.shared.fetch()
         guard let window = content.windows.first(where: { $0.windowID == id }) else {
             throw HostError("window \(id) is not on screen")
         }

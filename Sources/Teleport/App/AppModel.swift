@@ -25,11 +25,22 @@ final class AppModel: ObservableObject {
         if let mode = config.mode { activate(mode) }
     }
 
+    /// Set while services stop, for the overlay that covers the window meanwhile.
+    @Published private(set) var stoppingMessage: String?
+    /// The mode being switched to, so the pickers don't jump back while the old one stops.
+    @Published private(set) var switchingTo: TeleportConfig.Mode?
+
+    var isRunning: Bool { host != nil || viewer != nil }
+
     func setMode(_ mode: TeleportConfig.Mode) {
-        guard config.mode != mode || (host == nil && viewer == nil) else { return }
-        shutdown()
-        config.mode = mode
-        activate(mode)
+        guard stoppingMessage == nil, config.mode != mode || !isRunning else { return }
+        switchingTo = mode
+        Task {
+            await shutdown(message: "Stopping \(config.mode == .host ? "hosting" : "the viewer")…")
+            config.mode = mode
+            activate(mode)
+            switchingTo = nil
+        }
     }
 
     private func applyFlags() {
@@ -56,27 +67,22 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func shutdown() {
+    /// Stops the running mode without blocking the main thread; livekit-server can take seconds to exit.
+    func shutdown(message: String) async {
+        guard isRunning else { return }
+        stoppingMessage = message
+        defer { stoppingMessage = nil }
+        if let host { await host.stop() }
+        if let viewer { await viewer.disconnect() }
         cancellables.removeAll()
-        if let host {
-            host.stopNow()
-            Task { await host.stop() }
-        }
-        if let viewer {
-            Task { await viewer.disconnect() }
-        }
         host = nil
         viewer = nil
     }
 
-    /// Synchronous teardown for app termination and signals.
+    /// Synchronous last resort for signals, or a quit whose shutdown(message:) got stuck.
+    /// A viewer's room isn't left cleanly here: its disconnect needs the main thread we'd be blocking.
     func terminate() {
         host?.stopNow()
-        if let viewer {
-            let semaphore = DispatchSemaphore(value: 0)
-            Task { await viewer.disconnect(); semaphore.signal() }
-            _ = semaphore.wait(timeout: .now() + 2)
-        }
     }
 }
 
@@ -99,6 +105,10 @@ struct RootView: View {
             }
         }
         .frame(minWidth: 760, minHeight: 560)
+        .overlay {
+            if let message = app.stoppingMessage { StoppingOverlay(message: message) }
+        }
+        .animation(.easeInOut(duration: 0.2), value: app.stoppingMessage)
         .sheet(isPresented: $showSettings) { SettingsSheet(app: app) }
     }
 
@@ -107,7 +117,7 @@ struct RootView: View {
             Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 26, height: 26)
             Text("Teleport").font(.headline)
             Spacer()
-            Picker("", selection: Binding(get: { app.config.mode ?? .viewer }, set: { app.setMode($0) })) {
+            Picker("", selection: Binding(get: { app.switchingTo ?? app.config.mode ?? .viewer }, set: { app.setMode($0) })) {
                 Text("Host").tag(TeleportConfig.Mode.host)
                 Text("Viewer").tag(TeleportConfig.Mode.viewer)
             }
@@ -140,7 +150,7 @@ struct SettingsSheet: View {
             Form {
                 Section("This Mac") {
                     TextField("Name", text: $name)
-                    Picker("Role", selection: Binding(get: { app.config.mode ?? .viewer }, set: { app.setMode($0) })) {
+                    Picker("Role", selection: Binding(get: { app.switchingTo ?? app.config.mode ?? .viewer }, set: { app.setMode($0) })) {
                         Text("Host: shares its apps").tag(TeleportConfig.Mode.host)
                         Text("Viewer: uses another Mac's apps").tag(TeleportConfig.Mode.viewer)
                     }
