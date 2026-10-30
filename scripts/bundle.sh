@@ -13,6 +13,9 @@ APP="$ROOT/build/Teleport.app"
 VERSION="$(python3 -c "import json;print(json.load(open('$ROOT/package.json'))['version'])")"
 
 cd "$ROOT"
+# The build output is filtered down to errors and the final line, so say something first:
+# a release build is silent for a minute or more and looks hung otherwise.
+echo "building Teleport ($CONFIG)…"
 swift build -c "$CONFIG" 2>&1 | grep -E "error:|Build complete" || true
 [ -x "$BIN/Teleport" ] || { echo "build failed"; exit 1; }
 
