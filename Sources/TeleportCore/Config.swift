@@ -26,11 +26,11 @@ public struct TeleportConfig: Codable {
     public var livekitServerPath: String?
     /// Share clipboard text with the other Mac. Nil means on.
     public var clipboardSync: Bool?
-    /// Play a short sound when a portal opens or a Mac pairs. Nil means on.
+    /// Play a short sound when a portal opens or a Mac pairs. Nil means off.
     public var sounds: Bool?
 
     public var clipboardSyncEnabled: Bool { clipboardSync ?? true }
-    public var soundsEnabled: Bool { sounds ?? true }
+    public var soundsEnabled: Bool { sounds ?? false }
 
     public struct VirtualDisplayConfig: Codable {
         public var enabled: Bool

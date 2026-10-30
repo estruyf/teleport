@@ -19,41 +19,41 @@ enum Theme {
 
 // MARK: - The portal
 
-/// Concentric rings that turn while something is happening and glow when it's done.
+/// Concentric rings that turn only while something is happening and glow when it's done.
 struct PortalRing: View {
     enum Mood { case idle, busy, live }
     var mood: Mood = .idle
     var size: CGFloat = 120
-    @Local private var spin = false
-    @Local private var pulse = false
 
     var body: some View {
         ZStack {
             Circle()
                 .fill(RadialGradient(colors: [Theme.glow.opacity(mood == .idle ? 0.10 : 0.35), .clear], center: .center, startRadius: 0, endRadius: size * 0.6))
                 .frame(width: size * 1.3, height: size * 1.3)
-                .scaleEffect(pulse ? 1.08 : 0.92)
-                .animation(mood == .idle ? .default : .easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: pulse)
 
-            ring(radius: size * 0.50, width: size * 0.045, dash: [size * 0.30, size * 0.12], opacity: 0.9)
-                .rotationEffect(.degrees(spin ? 360 : 0))
-                .animation(spinAnimation(duration: mood == .busy ? 2.2 : 14), value: spin)
-            ring(radius: size * 0.38, width: size * 0.03, dash: [size * 0.10, size * 0.08], opacity: 0.55)
-                .rotationEffect(.degrees(spin ? -360 : 0))
-                .animation(spinAnimation(duration: mood == .busy ? 3.0 : 20), value: spin)
+            if mood == .busy {
+                // A timeline, not a repeatForever animation: it stops the moment the mood changes.
+                TimelineView(.animation) { context in
+                    let t = context.date.timeIntervalSinceReferenceDate
+                    rings(outer: .degrees(t / 2.2 * 360), inner: .degrees(-t / 3.0 * 360))
+                }
+            } else {
+                rings(outer: .zero, inner: .zero)
+            }
             Circle()
                 .strokeBorder(Theme.remote.opacity(mood == .idle ? 0.25 : 0.6), lineWidth: 1)
                 .frame(width: size * 0.56, height: size * 0.56)
         }
         .frame(width: size * 1.3, height: size * 1.3)
-        .onAppear {
-            spin = true
-            pulse = true
-        }
     }
 
-    private func spinAnimation(duration: Double) -> Animation {
-        .linear(duration: duration).repeatForever(autoreverses: false)
+    private func rings(outer: Angle, inner: Angle) -> some View {
+        ZStack {
+            ring(radius: size * 0.50, width: size * 0.045, dash: [size * 0.30, size * 0.12], opacity: 0.9)
+                .rotationEffect(outer)
+            ring(radius: size * 0.38, width: size * 0.03, dash: [size * 0.10, size * 0.08], opacity: 0.55)
+                .rotationEffect(inner)
+        }
     }
 
     private func ring(radius: CGFloat, width: CGFloat, dash: [CGFloat], opacity: Double) -> some View {
@@ -106,21 +106,22 @@ struct Card<Content: View>: View {
     }
 }
 
-/// Lifts and glows under the pointer.
-struct HoverLift: ViewModifier {
+/// A violet outline under the pointer. No scaling or animation: scaling a card
+/// re-renders the native buttons inside it, and they flicker.
+struct HoverOutline: ViewModifier {
+    var cornerRadius: CGFloat
     @Local private var hovering = false
 
     func body(content: Content) -> some View {
         content
-            .scaleEffect(hovering ? 1.015 : 1)
-            .shadow(color: Theme.glow.opacity(hovering ? 0.25 : 0), radius: 14, y: 4)
-            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hovering)
+            .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(Theme.remote.opacity(hovering ? 0.5 : 0)))
             .onHover { hovering = $0 }
     }
 }
 
 extension View {
-    func hoverLift() -> some View { modifier(HoverLift()) }
+    func hoverOutline(cornerRadius: CGFloat = 14) -> some View { modifier(HoverOutline(cornerRadius: cornerRadius)) }
 
     func primaryAction() -> some View {
         buttonStyle(.borderedProminent).tint(Theme.remote)
@@ -130,20 +131,15 @@ extension View {
 struct StatusPill: View {
     let text: String
     let color: Color
-    var pulsing = false
-    @Local private var on = false
 
     var body: some View {
         HStack(spacing: 6) {
             Circle().fill(color).frame(width: 7, height: 7)
-                .shadow(color: color.opacity(pulsing ? 0.8 : 0), radius: on ? 5 : 1)
-                .animation(pulsing ? .easeInOut(duration: 1).repeatForever(autoreverses: true) : .default, value: on)
             Text(text).font(.caption.weight(.medium))
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(color.opacity(0.12), in: Capsule())
-        .onAppear { on = true }
     }
 }
 

@@ -109,7 +109,7 @@ struct ViewerView: View {
                     Text(viewer.current?.name ?? "").font(.headline)
                     Text(viewer.current?.address ?? "").font(.caption).foregroundStyle(.secondary)
                 }
-                StatusPill(text: "Connected", color: Theme.ok, pulsing: true)
+                StatusPill(text: "Connected", color: Theme.ok)
                 Spacer()
                 if viewer.busy { ProgressView().controlSize(.small) }
                 Button { Task { await viewer.refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh")
@@ -165,7 +165,7 @@ private struct HostRow: View {
                 Button(action: connect) { Label("Teleport", systemImage: "arrow.up.forward.app") }.primaryAction()
             }
         }
-        .hoverLift()
+        .hoverOutline()
     }
 }
 
@@ -195,22 +195,40 @@ private struct RemoteAppCard: View {
             }
             if !app.windows.isEmpty {
                 Divider()
-                ForEach(app.windows) { window in
-                    Button { open(window) } label: {
-                        HStack {
-                            Image(systemName: "macwindow").foregroundStyle(.secondary)
-                            Text(window.title.isEmpty ? "Untitled" : window.title).lineLimit(1)
-                            Spacer()
-                            Text("\(Int(window.width))×\(Int(window.height))").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
-                            Image(systemName: "arrow.up.forward.app").foregroundStyle(Theme.remote)
-                        }
-                        .contentShape(Rectangle())
+                VStack(spacing: 2) {
+                    ForEach(app.windows) { window in
+                        WindowRow(window: window) { open(window) }
                     }
-                    .buttonStyle(.plain)
                 }
+                .padding(.horizontal, -8)
             }
         }
-        .hoverLift()
+    }
+}
+
+/// One remote window; the row itself is the button, highlighted under the pointer.
+private struct WindowRow: View {
+    let window: WindowInfo
+    let open: () -> Void
+    @Local private var hovering = false
+
+    var body: some View {
+        Button(action: open) {
+            HStack {
+                Image(systemName: "macwindow").foregroundStyle(.secondary)
+                Text(window.title.isEmpty ? "Untitled" : window.title).lineLimit(1)
+                Spacer()
+                Text("\(Int(window.width))×\(Int(window.height))").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
+                Image(systemName: "arrow.up.forward.app").foregroundStyle(Theme.remote)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Theme.remote.opacity(hovering ? 0.12 : 0), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Open in a portal window")
     }
 }
 

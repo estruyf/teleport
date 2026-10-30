@@ -86,8 +86,8 @@ struct HostView: View {
 
     private var statusPill: some View {
         switch host.state {
-        case .hosting: StatusPill(text: "Hosting", color: Theme.ok, pulsing: !host.viewers.isEmpty)
-        case .starting: StatusPill(text: "Starting", color: Theme.warn, pulsing: true)
+        case .hosting: StatusPill(text: "Hosting", color: Theme.ok)
+        case .starting: StatusPill(text: "Starting", color: Theme.warn)
         case .stopped: StatusPill(text: "Stopped", color: .gray)
         case .failed: StatusPill(text: "Failed", color: Theme.bad)
         }
@@ -151,7 +151,7 @@ struct HostView: View {
                     }
                     Spacer()
                     if host.viewers.contains(where: { $0.hasSuffix(String(device.publicKey.prefix(8))) }) {
-                        StatusPill(text: "Connected", color: Theme.ok, pulsing: true)
+                        StatusPill(text: "Connected", color: Theme.ok)
                     }
                     Chip(text: String(device.publicKey.prefix(8)), mono: true)
                     Button("Revoke", role: .destructive) { host.revoke(device) }.controlSize(.small)

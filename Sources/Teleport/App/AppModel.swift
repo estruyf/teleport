@@ -142,7 +142,7 @@ struct SettingsSheet: View {
     @Local private var vdWidth = ""
     @Local private var vdHeight = ""
     @Local private var clipboard = true
-    @Local private var sounds = true
+    @Local private var sounds = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {

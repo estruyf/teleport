@@ -49,7 +49,7 @@ final class ClipboardSync {
 
 /// Short sounds for the moments that matter. System sounds, nothing bundled.
 enum Sounds {
-    nonisolated(unsafe) static var enabled = true
+    nonisolated(unsafe) static var enabled = false
 
     static func portalOpened() { play("Pop") }
     static func paired() { play("Glass") }
