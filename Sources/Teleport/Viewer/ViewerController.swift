@@ -28,6 +28,12 @@ final class ViewerController: NSObject, ObservableObject {
     private var portals: [UInt32: PortalWindowController] = [:]
     /// Tracks that arrived before their open() reply did.
     private var pendingTracks: [String: RemoteVideoTrack] = [:]
+    /// Windows whose open() is on its way, so a double click doesn't make two portals.
+    private var opening: Set<UInt32> = []
+    /// Input goes out one event at a time. A Task per event could overtake another inside the
+    /// SDK's send path, and a key-up before its key-down types the wrong thing on the host.
+    private let inputQueue: AsyncStream<Data>.Continuation
+    private var inputTask: Task<Void, Never>?
     private let dockTiles = DockTileManager()
     private let hostStore = JSONListStore<PairedHost>(filename: "hosts.json")
     private let clipboard = ClipboardSync()
@@ -45,7 +51,14 @@ final class ViewerController: NSObject, ObservableObject {
     init(identity: DeviceIdentity, deviceName: String) {
         self.identity = identity
         self.deviceName = deviceName
+        let (inputStream, inputQueue) = AsyncStream<Data>.makeStream()
+        self.inputQueue = inputQueue
         super.init()
+        inputTask = Task { [room] in
+            for await data in inputStream {
+                try? await room.localParticipant.publish(data: data, options: DataPublishOptions(topic: Topic.input, reliable: true))
+            }
+        }
         hosts = hostStore.load()
         room.add(delegate: self)
         clipboard.onChange = { [weak self] text in self?.sendClipboard(text) }
@@ -54,9 +67,15 @@ final class ViewerController: NSObject, ObservableObject {
         }
     }
 
+    deinit {
+        inputQueue.finish()
+    }
+
     // MARK: - Pairing
 
-    func pair(address: String, port: Int = 7880, code: String) async {
+    /// True once paired, even when the connection afterwards fails; that shows on the hosts list.
+    @discardableResult
+    func pair(address: String, port: Int = 7880, code: String) async -> Bool {
         busy = true
         notice = nil
         pairingFingerprint = nil
@@ -71,8 +90,10 @@ final class ViewerController: NSObject, ObservableObject {
             notice = "Paired with \(host.name)."
             Sounds.paired()
             await connect(host)
+            return true
         } catch {
             notice = Self.friendly(error, host: nil)
+            return false
         }
     }
 
@@ -85,6 +106,8 @@ final class ViewerController: NSObject, ObservableObject {
     // MARK: - Connection
 
     func connect(_ host: PairedHost) async {
+        // A second click while the first is still connecting.
+        if case .connecting = state, reconnectTask == nil { return }
         if connected { await disconnect() }
         reconnectTask?.cancel()
         userDisconnecting = false
@@ -115,6 +138,7 @@ final class ViewerController: NSObject, ObservableObject {
         clipboard.stop()
         for portal in portals.values { portal.close() }
         portals.removeAll()
+        pendingTracks.removeAll()
         dockTiles.removeAll()
         await room.disconnect()
         current = nil
@@ -129,6 +153,7 @@ final class ViewerController: NSObject, ObservableObject {
         reopenAfterReconnect = portals.values.map(\.info)
         for portal in portals.values { portal.hostClosed() }
         portals.removeAll()
+        pendingTracks.removeAll()
         dockTiles.removeAll()
         clipboard.stop()
         apps = []
@@ -144,6 +169,7 @@ final class ViewerController: NSObject, ObservableObject {
                 guard let self, !Task.isCancelled, !self.userDisconnecting else { return }
                 do {
                     try await self.join(host)
+                    self.reconnectTask = nil
                     self.notice = nil
                     await self.refresh()
                     let toReopen = self.reopenAfterReconnect
@@ -154,12 +180,23 @@ final class ViewerController: NSObject, ObservableObject {
                     return
                 } catch {
                     Log.warn("reconnect to \(host.name) failed: \(error)")
+                    // Revoked on the host: retrying won't help.
+                    if case PairingError.notTrusted = error {
+                        self.giveUpReconnecting(Self.friendly(error, host: host))
+                        return
+                    }
                 }
             }
-            guard let self else { return }
-            self.current = nil
-            self.state = .failed("Could not reconnect to \(host.name). Is Teleport still running there?")
+            self?.giveUpReconnecting("Could not reconnect to \(host.name). Is Teleport still running there?")
         }
+    }
+
+    private func giveUpReconnecting(_ message: String) {
+        reconnectTask = nil
+        reopenAfterReconnect = []
+        current = nil
+        notice = nil
+        state = .failed(message)
     }
 
     /// Errors in plain words.
@@ -191,7 +228,9 @@ final class ViewerController: NSObject, ObservableObject {
     // MARK: - Clipboard
 
     private func sendClipboard(_ text: String) {
-        guard connected, clipboardSyncEnabled, let data = try? JSONEncoder().encode(ClipboardMessage(text: text)) else { return }
+        guard connected, clipboardSyncEnabled, let data = try? JSONEncoder().encode(ClipboardMessage(text: text)),
+              data.count <= ClipboardSync.maxBytes
+        else { return }
         Task { try? await room.localParticipant.publish(data: data, options: DataPublishOptions(topic: Topic.clipboard, reliable: true)) }
     }
 
@@ -215,10 +254,15 @@ final class ViewerController: NSObject, ObservableObject {
             existing.window?.makeKeyAndOrderFront(nil)
             return
         }
+        guard !opening.contains(window.id) else { return }
+        opening.insert(window.id)
+        defer { opening.remove(window.id) }
         do {
             let reply = try await rpc(RPCMethod.open, try OpenRequest(windowID: window.id).jsonString(), timeout: 20)
             let response = try RPCReply.decode(OpenResponse.self, from: reply)
-            let portal = PortalWindowController(info: response.window, hostName: current?.name ?? "", viewer: self)
+            // Disconnected while the host was opening it.
+            guard connected else { return }
+            let portal = PortalWindowController(info: response.window, scale: response.scale, hostName: current?.name ?? "", viewer: self)
             portals[window.id] = portal
             if let track = pendingTracks.removeValue(forKey: response.trackName) {
                 portal.attach(track: track)
@@ -300,10 +344,8 @@ final class ViewerController: NSObject, ObservableObject {
     }
 
     func send(_ event: InputEvent) {
-        guard let data = try? JSONEncoder().encode(event) else { return }
-        Task {
-            try? await room.localParticipant.publish(data: data, options: DataPublishOptions(topic: Topic.input, reliable: true))
-        }
+        guard connected, let data = try? JSONEncoder().encode(event) else { return }
+        inputQueue.yield(data)
     }
 
     /// Sends a dropped file to the host, which drags it into the window at (x, y).
@@ -342,13 +384,28 @@ final class ViewerController: NSObject, ObservableObject {
             icons[bundleID] = icon
             return icon
         }
-        guard let reply = try? await rpc(RPCMethod.icon, try IconRequest(bundleID: bundleID).jsonString()),
-              let response = try? RPCReply.decode(IconResponse.self, from: reply),
-              let data = Data(base64Encoded: response.png),
-              let icon = NSImage(data: data)
-        else { return nil }
+        guard let icon = await remoteIcon(bundleID) else { return nil }
         icons[bundleID] = icon
         return icon
+    }
+
+    /// 256 px, enough for a Dock tile on a Retina screen. It takes several replies; a host
+    /// before 0.3 ignores the size and sends one small PNG.
+    private func remoteIcon(_ bundleID: String) async -> NSImage? {
+        func part(_ index: Int) async -> IconResponse? {
+            guard let payload = try? IconRequest(bundleID: bundleID, size: 256, part: index).jsonString(),
+                  let reply = try? await rpc(RPCMethod.icon, payload)
+            else { return nil }
+            return try? RPCReply.decode(IconResponse.self, from: reply)
+        }
+        guard let first = await part(0) else { return nil }
+        var encoded = first.png
+        for index in 1 ..< max(1, first.parts ?? 1) {
+            guard let next = await part(index) else { return nil }
+            encoded += next.png
+        }
+        guard let data = Data(base64Encoded: encoded) else { return nil }
+        return NSImage(data: data)
     }
 
     private func trackArrived(_ track: RemoteVideoTrack, name: String) {
@@ -360,9 +417,12 @@ final class ViewerController: NSObject, ObservableObject {
         }
     }
 
-    private func trackLeft(name: String) {
-        pendingTracks.removeValue(forKey: name)
+    private func trackLeft(name: String, sid: Track.Sid?) {
+        if pendingTracks[name]?.sid == sid { pendingTracks.removeValue(forKey: name) }
         guard let id = TrackName.windowID(from: name), let portal = portals[id] else { return }
+        // A portal closed and reopened at once gets a new track under the same name; the old
+        // one's unsubscribe must not close it.
+        if let attached = portal.trackSid, attached != sid { return }
         portal.hostClosed()
         portalClosed(id)
     }
@@ -377,7 +437,8 @@ extension ViewerController: RoomDelegate {
 
     nonisolated func room(_: Room, participant _: RemoteParticipant, didUnsubscribeTrack publication: RemoteTrackPublication) {
         let name = publication.name
-        Task { @MainActor in self.trackLeft(name: name) }
+        let sid = publication.sid
+        Task { @MainActor in self.trackLeft(name: name, sid: sid) }
     }
 
     nonisolated func room(_: Room, participant _: RemoteParticipant?, didReceiveData data: Data, forTopic topic: String, encryptionType _: EncryptionType) {

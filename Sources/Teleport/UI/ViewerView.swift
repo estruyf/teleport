@@ -327,8 +327,8 @@ private struct PairSheet: View {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(viewer.busy ? "Pairing…" : "Pair") {
                     Task {
-                        await viewer.pair(address: address.trimmingCharacters(in: .whitespaces), port: Int(port) ?? 7880, code: code)
-                        if viewer.connected { dismiss() }
+                        // Paired but not connected: the hosts list behind the sheet says why.
+                        if await viewer.pair(address: address.trimmingCharacters(in: .whitespaces), port: Int(port) ?? 7880, code: code) { dismiss() }
                     }
                 }
                 .primaryAction()

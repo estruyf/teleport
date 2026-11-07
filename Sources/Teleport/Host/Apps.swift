@@ -113,6 +113,36 @@ enum AppCatalog {
         return QuitResponse(quit: quit)
     }
 
+    /// Base64 PNGs by bundle ID and size, so the parts of one icon come from one rendering.
+    private static var iconCache: [String: String] = [:]
+    private static let iconPartLength = 12_000
+
+    /// The icon at the size asked for, in parts that each fit an RPC reply; without a size,
+    /// one PNG shrunk until it fits.
+    static func icon(_ request: IconRequest) throws -> IconResponse {
+        guard let size = request.size else { return try icon(bundleID: request.bundleID) }
+        let key = "\(request.bundleID)@\(size)"
+        let encoded: String
+        if let cached = iconCache[key] {
+            encoded = cached
+        } else {
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: request.bundleID) else {
+                throw HostError("\(request.bundleID) is not installed on the host")
+            }
+            guard let png = NSWorkspace.shared.icon(forFile: url.path).pngData(size: min(max(size, 16), 512)) else {
+                throw HostError("could not render the icon for \(request.bundleID)")
+            }
+            encoded = png.base64EncodedString()
+            iconCache[key] = encoded
+        }
+        let parts = (encoded.count + iconPartLength - 1) / iconPartLength
+        let part = request.part ?? 0
+        guard (0 ..< parts).contains(part) else { throw HostError("no part \(part) of that icon") }
+        let start = encoded.index(encoded.startIndex, offsetBy: part * iconPartLength)
+        let end = encoded.index(start, offsetBy: iconPartLength, limitedBy: encoded.endIndex) ?? encoded.endIndex
+        return IconResponse(png: String(encoded[start ..< end]), parts: parts)
+    }
+
     /// PNG icon shrunk until it fits a 15 KB RPC reply.
     static func icon(bundleID: String) throws -> IconResponse {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {

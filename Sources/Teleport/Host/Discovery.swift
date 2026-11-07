@@ -146,8 +146,14 @@ final class HostBrowser: ObservableObject {
     // MARK: - Tailscale
 
     private func sweepTailnet() async {
-        let peers = TailscalePeers.list()
-        guard !peers.isEmpty else { return }
+        // Runs the Tailscale CLI and waits for it; not on the main thread.
+        let peers = await Task.detached(priority: .utility) { TailscalePeers.list() }.value
+        guard !Task.isCancelled else { return }
+        guard !peers.isEmpty else {
+            // Without this the sheet says "Looking…" forever on a Mac without Tailscale.
+            searching = false
+            return
+        }
         var found: [DiscoveredHost] = []
         await withTaskGroup(of: DiscoveredHost?.self) { group in
             for peer in peers {
