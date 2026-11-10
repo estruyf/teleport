@@ -254,6 +254,8 @@ struct CodeEntry: View {
     @Local private var cursor = 0
     /// The box was clicked or arrowed to, so Delete clears it instead of the one before.
     @Local private var picked = false
+    /// The I-beam is pushed; a sheet closing under the pointer never sends the hover-out that pops it.
+    @Local private var cursorPushed = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -274,7 +276,15 @@ struct CodeEntry: View {
         }
         .onAppear { fill(code) }
         .onChange(of: code) { _, new in if new != joined { fill(new) } }
-        .onHover { inside in inside ? NSCursor.iBeam.push() : NSCursor.pop() }
+        .onHover { inside in
+            guard inside != cursorPushed else { return }
+            inside ? NSCursor.iBeam.push() : NSCursor.pop()
+            cursorPushed = inside
+        }
+        .onDisappear {
+            if cursorPushed { NSCursor.pop() }
+            cursorPushed = false
+        }
         .accessibilityElement()
         .accessibilityLabel("Pairing code")
         .accessibilityValue(code)

@@ -51,13 +51,22 @@ final class HostController: NSObject, ObservableObject {
     private let injector = InputInjector()
     private let bonjour = BonjourAdvertiser()
     private let clipboard = ClipboardSync()
+    private let keepAlive = KeepAlive()
     private var portals: [CGWindowID: Portal] = [:]
+    private var openingPortals: [CGWindowID: Task<Portal, Error>] = [:]
     private var activity: NSObjectProtocol?
     private var lockObservers: [NSObjectProtocol] = []
     /// Last lock state sent to viewers.
     private var sentLocked: Bool?
     private let trustStore = JSONListStore<TrustedDevice>(filename: "trust.json")
     private var approvalContinuation: CheckedContinuation<Bool, Never>?
+    /// The room keeps RPC and byte-stream handlers across disconnects, and registering twice throws.
+    private var handlersRegistered = false
+    /// Restarting after livekit-server died; cancelled by a deliberate stop.
+    private var recovery: Task<Void, Never>?
+    /// Bumped by stop(), so a start() still on its way knows to undo itself instead of hosting.
+    private var generation = 0
+    private var startInFlight = false
     private var usedNonces: Set<String> = []
     private var failedPairAttempts = 0
     private var codeTimer: Timer?
@@ -67,12 +76,20 @@ final class HostController: NSObject, ObservableObject {
         self.identity = identity
         super.init()
         trusted = trustStore.load()
+        room.add(delegate: self)
     }
 
     // MARK: - Lifecycle
 
     func start() async {
-        guard state == .stopped || state.isFailed else { return }
+        // A start that was stopped halfway may still be unwinding; it owns the ports until then.
+        guard state == .stopped || state.isFailed, !startInFlight else { return }
+        startInFlight = true
+        defer { startInFlight = false }
+        let generation = generation
+        func stillWanted() throws {
+            guard generation == self.generation else { throw HostError("stopped while starting") }
+        }
         state = .starting
         livekitMissing = false
         do {
@@ -81,6 +98,7 @@ final class HostController: NSObject, ObservableObject {
             addresses = NetworkAddresses.current()
             // Opens every app bundle in /Applications; keep that off the main thread.
             installedApps = await Task.detached(priority: .userInitiated) { InstalledApps.scan() }.value
+            try stillWanted()
 
             // Nobody sits at this Mac; keep it awake while hosting. The display too: when it
             // turns off (as soon as Screen Sharing ends on a Mac without a screen), macOS
@@ -97,10 +115,11 @@ final class HostController: NSObject, ObservableObject {
 
             let server = LiveKitServer(config: config)
             server.onUnexpectedExit = { [weak self] in
-                Task { @MainActor in await self?.recoverFromServerExit() }
+                Task { @MainActor in self?.recoverFromServerExit() }
             }
             try await server.start()
             self.server = server
+            try stillWanted()
 
             let control = ControlServer { [weak self] method, path, body in
                 await self?.handleControl(method: method, path: path, body: body) ?? (500, Data())
@@ -108,29 +127,46 @@ final class HostController: NSObject, ObservableObject {
             try control.start(port: config.controlPort)
             self.control = control
 
-            room.add(delegate: self)
             try await room.connect(
                 url: server.signalURL,
                 token: AccessToken.make(config: config, identity: Self.identity)
             )
-            try await registerRPCs()
-            try await room.registerByteStreamHandler(for: Topic.files) { [weak self] reader, _ in
-                await self?.receiveFile(reader)
+            if !handlersRegistered {
+                try await registerRPCs()
+                try await room.registerByteStreamHandler(for: Topic.files) { [weak self] reader, _ in
+                    await self?.receiveFile(reader)
+                }
+                handlersRegistered = true
             }
+            try stillWanted()
             bonjour.start(name: config.deviceName, port: config.port, publicKey: identity.publicKeyHex)
             clipboard.onChange = { [weak self] text in self?.broadcastClipboard(text) }
+            if config.keepAliveEnabled { keepAlive.start() }
             state = .hosting
             Log.info("hosting on port \(config.port); allowed apps: \(config.allowedApps.joined(separator: ", "))")
         } catch {
+            // Don't leave half of it running: a connected room or a held port makes the next Start fail too.
+            await tearDown()
+            // Stopped (or switched to viewer) meanwhile: stop() already set the state.
+            guard generation == self.generation else { return }
             Log.error("host failed to start: \(error)")
             livekitMissing = "\(error)".contains("livekit-server not found")
             state = .failed(livekitMissing ? "The streaming server is missing." : "\(error)")
-            server?.stop()
-            control?.stop()
         }
     }
 
     func stop() async {
+        generation += 1
+        recovery?.cancel()
+        recovery = nil
+        await tearDown()
+        state = .stopped
+    }
+
+    /// Undoes start(); safe on a half-started host.
+    private func tearDown() async {
+        cancelPairing()
+        keepAlive.stop()
         for id in Array(portals.keys) { await close(id) }
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
         activity = nil
@@ -144,7 +180,8 @@ final class HostController: NSObject, ObservableObject {
         let server = self.server
         self.server = nil
         await server?.stopInBackground()
-        state = .stopped
+        viewers = []
+        sentLocked = nil
     }
 
     /// Synchronous shutdown for signal handlers and app termination.
@@ -154,21 +191,31 @@ final class HostController: NSObject, ObservableObject {
         server?.stop()
     }
 
-    /// livekit-server died on its own: start over. Viewers reconnect by themselves.
-    private func recoverFromServerExit() async {
-        guard state == .hosting else { return }
+    /// livekit-server died on its own: start over, retrying for a few minutes. Viewers reconnect by themselves.
+    private func recoverFromServerExit() {
+        guard state == .hosting, recovery == nil else { return }
         Log.warn("livekit-server died; restarting the host")
-        server = nil
-        await stop()
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
-        await start()
+        recovery = Task { [weak self] in
+            guard let self else { return }
+            defer { self.recovery = nil }
+            await self.tearDown()
+            self.state = .stopped
+            for delay: UInt64 in [1, 5, 15, 30, 60, 120] {
+                try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                await self.start()
+                if self.state == .hosting { return }
+            }
+        }
     }
 
     // MARK: - Clipboard
 
     private func broadcastClipboard(_ text: String) {
+        // Escaping can make the JSON longer than the text; packets over the limit are dropped.
         guard config.clipboardSyncEnabled, !room.remoteParticipants.isEmpty,
-              let data = try? JSONEncoder().encode(ClipboardMessage(text: text)) else { return }
+              let data = try? JSONEncoder().encode(ClipboardMessage(text: text)), data.count <= ClipboardSync.maxBytes
+        else { return }
         Task { try? await room.localParticipant.publish(data: data, options: DataPublishOptions(topic: Topic.clipboard, reliable: true)) }
     }
 
@@ -265,7 +312,18 @@ final class HostController: NSObject, ObservableObject {
 
     func isAllowed(_ bundleID: String) -> Bool { config.allowedApps.contains(bundleID) }
 
-    func rescanApps() { installedApps = InstalledApps.scan() }
+    func setKeepAlive(_ on: Bool) {
+        config.keepAlive = on
+        if on, state == .hosting { keepAlive.start() } else if !on { keepAlive.stop() }
+    }
+
+    /// Opens every app bundle on disk; off the main thread.
+    func rescanApps() {
+        Task {
+            let apps = await Task.detached(priority: .userInitiated) { InstalledApps.scan() }.value
+            installedApps = apps
+        }
+    }
 
     // MARK: - Pairing
 
@@ -299,13 +357,14 @@ final class HostController: NSObject, ObservableObject {
     func revoke(_ device: TrustedDevice) {
         trusted.removeAll { $0.publicKey == device.publicKey }
         try? trustStore.save(trusted)
-        // Drop any live connection from that device.
-        for participant in room.remoteParticipants.values {
-            if participant.identity?.stringValue.hasSuffix(String(device.publicKey.prefix(8))) == true {
-                Task { try? await room.localParticipant.performRpc(destinationIdentity: participant.identity!, method: RPCMethod.kick, payload: "{}") }
-            }
-        }
+        // Drop its live connection on the server; asking the viewer to leave would rely on it obeying.
+        // Its reconnect then fails at the token endpoint, which no longer knows it.
+        let identity = Self.viewerIdentity(device.publicKey)
+        guard let server, room.remoteParticipants.values.contains(where: { $0.identity?.stringValue == identity }) else { return }
+        Task { await server.removeParticipant(identity) }
     }
+
+    static func viewerIdentity(_ publicKey: String) -> String { "viewer-\(publicKey.prefix(8))" }
 
     private func handleControl(method: String, path: String, body: Data) async -> (Int, Data) {
         func json(_ value: some Encodable, _ status: Int = 200) -> (Int, Data) {
@@ -328,12 +387,14 @@ final class HostController: NSObject, ObservableObject {
                 return json(ControlError("wrong code"), 403)
             }
             let fingerprint = PairingCrypto.fingerprint(request.viewerKey, identity.publicKeyHex, key: key)
-            pendingApproval = PendingApproval(name: payload.viewerName, fingerprint: fingerprint)
+            let pending = PendingApproval(name: payload.viewerName, fingerprint: fingerprint)
+            pendingApproval = pending
             NSApp.requestUserAttention(.criticalRequest)
             let allowed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                 approvalContinuation = continuation
+                // Only this request's timeout: a later one may be waiting by then.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
-                    guard let self, self.approvalContinuation != nil else { return }
+                    guard let self, self.pendingApproval?.id == pending.id else { return }
                     self.resolveApproval(false)
                 }
             }
@@ -359,7 +420,7 @@ final class HostController: NSObject, ObservableObject {
             if usedNonces.count > 1000 { usedNonces.removeAll() }
             trusted[index].lastSeen = Date()
             try? trustStore.save(trusted)
-            let viewerIdentity = "viewer-\(request.viewerKey.prefix(8))"
+            let viewerIdentity = Self.viewerIdentity(request.viewerKey)
             let token = AccessToken.make(config: config, identity: viewerIdentity, ttl: 3600)
             let result = TokenResult(token: token, url: "", room: config.room, hostIdentity: Self.identity)
             guard let box = try? PairingCrypto.seal(result, with: key) else { return json(ControlError("seal failed"), 500) }
@@ -423,16 +484,34 @@ final class HostController: NSObject, ObservableObject {
         try await room.registerRpcMethod(RPCMethod.icon) { data in
             await RPCReply.wrap {
                 let request = try IconRequest.fromJSON(data.payload)
-                return try await AppCatalog.icon(bundleID: request.bundleID).jsonString()
+                return try await AppCatalog.icon(request).jsonString()
             }
         }
     }
 
     private func open(_ request: OpenRequest) async throws -> OpenResponse {
+        // Two viewers, or a double click, can ask for the same window at once; one portal serves both.
+        let portal: Portal
         if let existing = portals[request.windowID] {
-            return OpenResponse(trackName: TrackName.forWindow(existing.windowID), window: existing.info)
+            portal = existing
+        } else if let opening = openingPortals[request.windowID] {
+            portal = try await opening.value
+        } else {
+            let task = Task { try await self.openPortal(request.windowID) }
+            openingPortals[request.windowID] = task
+            defer { openingPortals[request.windowID] = nil }
+            portal = try await task.value
+            portal.onGone = { [weak self] portal in
+                Task { await self?.close(portal.windowID) }
+            }
+            portals[portal.windowID] = portal
+            openPortals = portals.values.map(\.info)
         }
-        var (window, display) = try await WindowCatalog.find(request.windowID)
+        return OpenResponse(trackName: TrackName.forWindow(portal.windowID), window: portal.info, scale: portal.scale)
+    }
+
+    private func openPortal(_ windowID: CGWindowID) async throws -> Portal {
+        var (window, display) = try await WindowCatalog.find(windowID)
         if let bundleID = window.owningApplication?.bundleIdentifier, !config.allowedApps.contains(bundleID) {
             throw HostError("\(bundleID) is not in the allowed apps")
         }
@@ -444,16 +523,9 @@ final class HostController: NSObject, ObservableObject {
             let stageBounds = CGDisplayBounds(stage.displayID)
             AXWindow.setPosition(pid: pid, windowID: window.windowID, origin: CGPoint(x: stageBounds.minX + 40, y: stageBounds.minY + 40))
             try await Task.sleep(nanoseconds: 300_000_000)
-            (window, display) = try await WindowCatalog.find(request.windowID)
+            (window, display) = try await WindowCatalog.find(windowID)
         }
-
-        let portal = try await Portal.open(window: window, display: display, room: room)
-        portal.onGone = { [weak self] portal in
-            Task { await self?.close(portal.windowID) }
-        }
-        portals[portal.windowID] = portal
-        openPortals = portals.values.map(\.info)
-        return OpenResponse(trackName: TrackName.forWindow(portal.windowID), window: portal.info)
+        return try await Portal.open(window: window, display: display, room: room)
     }
 
     private func close(_ windowID: CGWindowID) async {
@@ -478,13 +550,16 @@ final class HostController: NSObject, ObservableObject {
     /// A file dropped on a portal: save it, then drag it into the window.
     private func receiveFile(_ reader: ByteStreamReader) async {
         let info = reader.info
-        let name = (info.name ?? "file").components(separatedBy: "/").last ?? "file"
+        // Only a plain file name; never "..", a hidden file, or a path.
+        var name = (info.name ?? "").components(separatedBy: "/").last?.trimmingCharacters(in: .whitespaces) ?? ""
+        while name.hasPrefix(".") { name.removeFirst() }
+        if name.isEmpty { name = "file" }
         let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/Teleport", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let target = folder.appendingPathComponent(name)
+            let target = Self.freeURL(in: folder, for: name)
             try await reader.readAll().write(to: target, options: .atomic)
-            Log.info("received \(name) (\(info.totalLength ?? 0) bytes)")
+            Log.info("received \(target.lastPathComponent) (\(info.totalLength ?? 0) bytes)")
             guard let idText = info.attributes[FileDropKeys.windowID], let windowID = UInt32(idText),
                   let portal = portals[windowID],
                   let x = Double(info.attributes[FileDropKeys.x] ?? ""), let y = Double(info.attributes[FileDropKeys.y] ?? "")
@@ -496,6 +571,19 @@ final class HostController: NSObject, ObservableObject {
         } catch {
             Log.warn("file receive failed: \(error)")
         }
+    }
+
+    /// "name.ext", or "name 2.ext" and so on when that is taken, like Finder does.
+    private static func freeURL(in folder: URL, for name: String) -> URL {
+        let first = folder.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: first.path) else { return first }
+        let base = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        for n in 2 ... 999 {
+            let candidate = folder.appendingPathComponent(ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)")
+            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        }
+        return folder.appendingPathComponent("\(UUID().uuidString)-\(name)")
     }
 
     private func viewerLeft() async {

@@ -20,7 +20,13 @@ final class Portal: NSObject {
     private let track: LocalVideoTrack
     private var publication: LocalTrackPublication?
     private var geometryTimer: Timer?
-    private var scale: CGFloat = 2
+    /// Video pixels per window point.
+    private(set) var scale: CGFloat = 2
+    /// Closed, or the window went away; nothing may restart it.
+    private var gone = false
+    private var movingDisplay = false
+    private var restarts = 0
+    private var lastRestart = Date.distantPast
 
     /// Called when the window disappears on the host.
     var onGone: ((Portal) -> Void)?
@@ -34,8 +40,14 @@ final class Portal: NSObject {
             options: BufferCaptureOptions(dimensions: size, fps: 60)
         )
         let portal = Portal(window: window, display: display, app: app, track: track)
-        try await portal.startCapture()
-        try await portal.publish(to: room)
+        do {
+            try await portal.startCapture()
+            try await portal.publish(to: room)
+        } catch {
+            // A stream that started but never delivered a frame would otherwise capture forever.
+            await portal.close(room: room)
+            throw error
+        }
         portal.startGeometryTracking()
         return portal
     }
@@ -49,17 +61,64 @@ final class Portal: NSObject {
         self.app = app
         self.track = track
         output = FrameOutput(capturer: track.capturer as! BufferCapturer)
+        super.init()
+        output.onStop = { [weak self] error in
+            Task { @MainActor in self?.captureStopped(error) }
+        }
     }
 
     private func startCapture() async throws {
         let filter = SCContentFilter(display: display, including: [app], exceptingWindows: [])
         scale = CGFloat(filter.pointPixelScale)
+        if scale < 2 {
+            Log.warn("portal \(windowID) captures at \(scale)x, so it looks soft on a Retina viewer; the virtual display renders at 2x")
+        }
         let stream = SCStream(filter: filter, configuration: makeConfiguration(), delegate: output)
         try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: output.queue)
         try await stream.start()
         self.stream = stream
         // WebRTC needs a frame to size the encoder before the track is published.
         try await output.waitForFirstFrame(timeout: 3)
+    }
+
+    /// ScreenCaptureKit gave up on the stream (the display changed or slept, say). Without a
+    /// restart the viewer keeps the last frame forever; after a few failed tries the portal closes.
+    private func captureStopped(_ error: Error) {
+        guard !gone, stream != nil else { return }
+        stream = nil
+        if Date().timeIntervalSince(lastRestart) > 60 { restarts = 0 }
+        restarts += 1
+        lastRestart = Date()
+        guard restarts <= 3 else {
+            Log.warn("portal \(windowID) capture keeps stopping; closing it")
+            markGone()
+            return
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(restarts) * 1_000_000_000)
+            guard !gone else { return }
+            do {
+                let (_, newDisplay) = try await WindowCatalog.find(windowID)
+                display = newDisplay
+                try await startCapture()
+                if gone {
+                    // Closed while restarting.
+                    try? await stream?.stop()
+                    stream = nil
+                    return
+                }
+                Log.info("portal \(windowID) capture restarted")
+            } catch {
+                Log.warn("portal \(windowID) capture restart failed: \(error)")
+                markGone()
+            }
+        }
+    }
+
+    private func markGone() {
+        guard !gone else { return }
+        gone = true
+        onGone?(self)
     }
 
     private func publish(to room: Room) async throws {
@@ -75,6 +134,7 @@ final class Portal: NSObject {
     }
 
     func close(room: Room) async {
+        gone = true
         geometryTimer?.invalidate()
         geometryTimer = nil
         try? await stream?.stop()
@@ -107,9 +167,10 @@ final class Portal: NSObject {
     }
 
     private func refreshGeometry() {
+        guard !gone else { return }
         output.refreshIfIdle()
         guard let current = WindowCatalog.currentFrame(of: windowID) else {
-            onGone?(self)
+            markGone()
             return
         }
         guard current != frame else { return }
@@ -121,12 +182,14 @@ final class Portal: NSObject {
             stream?.updateConfiguration(makeConfiguration()) { error in
                 if let error { Log.warn("portal update failed: \(error)") }
             }
-        } else {
+        } else if !movingDisplay {
             Task { await moveToNewDisplay() }
         }
     }
 
     private func moveToNewDisplay() async {
+        movingDisplay = true
+        defer { movingDisplay = false }
         guard let (_, newDisplay) = try? await WindowCatalog.find(windowID) else { return }
         display = newDisplay
         let filter = SCContentFilter(display: newDisplay, including: [app], exceptingWindows: [])
@@ -143,8 +206,9 @@ final class Portal: NSObject {
 
         let config = SCStreamConfiguration()
         config.sourceRect = rect
-        config.width = max(2, Int((rect.width * scale).rounded()))
-        config.height = max(2, Int((rect.height * scale).rounded()))
+        // Even sizes: the H.264 encoder crops odd ones, and the viewer would then scale by a hair.
+        config.width = max(2, Int((rect.width * scale).rounded()) & ~1)
+        config.height = max(2, Int((rect.height * scale).rounded()) & ~1)
         config.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
         config.colorSpaceName = CGColorSpace.sRGB
@@ -161,7 +225,10 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked 
     private let capturer: BufferCapturer
     private var lastBuffer: CVPixelBuffer?
     private var lastFrameAt = Date.distantPast
+    private var lastRefreshAt = Date.distantPast
     private var idleRefreshes = 0
+    /// ScreenCaptureKit stopped the stream on its own. Called on `queue`.
+    var onStop: ((Error) -> Void)?
     private var firstFrame: CheckedContinuation<Void, Error>?
     private var hasFrame = false
 
@@ -201,19 +268,25 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked 
         }
     }
 
-    /// ScreenCaptureKit stops sending frames when nothing changes. Re-sending the
-    /// last frame a few times lets the encoder sharpen a static window.
+    /// ScreenCaptureKit stops sending frames when nothing changes. Keep re-sending the last one:
+    /// a quick burst so the encoder sharpens a static window, then once a second, so a viewer that
+    /// lost a packet or just subscribed gets a fresh keyframe instead of a frozen or blurry picture.
     func refreshIfIdle() {
         queue.async {
-            guard let buffer = self.lastBuffer, self.idleRefreshes < 3,
-                  Date().timeIntervalSince(self.lastFrameAt) > 0.4 * Double(self.idleRefreshes + 1)
+            let now = Date()
+            let interval = self.idleRefreshes < 8 ? 0.2 : 1.0
+            guard let buffer = self.lastBuffer,
+                  now.timeIntervalSince(self.lastFrameAt) > 0.2,
+                  now.timeIntervalSince(self.lastRefreshAt) >= interval
             else { return }
             self.idleRefreshes += 1
+            self.lastRefreshAt = now
             self.capturer.capture(buffer)
         }
     }
 
     func stream(_: SCStream, didStopWithError error: Error) {
         Log.warn("capture stopped: \(error)")
+        queue.async { self.onStop?(error) }
     }
 }

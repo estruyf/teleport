@@ -103,6 +103,10 @@ final class StatusBar: NSObject, NSMenuDelegate {
                 } else {
                     menu.addItem(withTitle: "Show pairing code", action: #selector(startPairing), keyEquivalent: "").target = self
                 }
+                let keepAlive = NSMenuItem(title: "Keep This Mac from Locking", action: #selector(toggleKeepAlive), keyEquivalent: "")
+                keepAlive.target = self
+                keepAlive.state = host.config.keepAliveEnabled ? .on : .off
+                menu.addItem(keepAlive)
                 menu.addItem(withTitle: "Stop hosting", action: #selector(stopHost), keyEquivalent: "").target = self
             } else {
                 menu.addItem(withTitle: "Start hosting", action: #selector(startHost), keyEquivalent: "").target = self
@@ -204,6 +208,10 @@ final class StatusBar: NSObject, NSMenuDelegate {
     @objc private func cancelPairing() { app.host?.cancelPairing() }
     @objc private func startHost() { Task { await app.host?.start() } }
     @objc private func stopHost() { Task { await app.host?.stop() } }
+    @objc private func toggleKeepAlive() {
+        guard let host = app.host else { return }
+        host.setKeepAlive(!host.config.keepAliveEnabled)
+    }
     @objc private func disconnect() { Task { await app.viewer?.disconnect() } }
     @objc private func launchApp(_ sender: NSMenuItem) {
         guard let remoteApp = sender.representedObject as? AppInfo else { return }

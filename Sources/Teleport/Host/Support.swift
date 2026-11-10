@@ -131,8 +131,14 @@ enum InstalledApps {
         return apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    static func icon(for app: InstalledApp) -> NSImage {
-        NSWorkspace.shared.icon(forFile: app.url.path)
+    @MainActor private static var icons: [String: NSImage] = [:]
+
+    /// Cached: views ask for it on every redraw.
+    @MainActor static func icon(for app: InstalledApp) -> NSImage {
+        if let cached = icons[app.bundleID] { return cached }
+        let icon = NSWorkspace.shared.icon(forFile: app.url.path)
+        icons[app.bundleID] = icon
+        return icon
     }
 }
 

@@ -38,6 +38,12 @@ final class ControlServer: @unchecked Sendable {
     private func serve(_ connection: NWConnection) {
         connection.start(queue: queue)
         var buffer = Data()
+        var answering = false
+        // A client that connects and never finishes its request would hold the connection forever.
+        // Answering can take longer: pairing waits for the person at the host.
+        queue.asyncAfter(deadline: .now() + 15) {
+            if !answering { connection.cancel() }
+        }
 
         func readMore() {
             connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
@@ -49,11 +55,13 @@ final class ControlServer: @unchecked Sendable {
                     return
                 }
                 if let request = Self.parse(buffer) {
+                    answering = true
                     Task {
                         let (status, body) = await self.handler(request.method, request.path, request.body)
                         self.respond(connection, status: status, body: body)
                     }
                 } else if isComplete || buffer.count > 1_000_000 {
+                    answering = true
                     self.respond(connection, status: 400, body: Data("{\"error\":\"bad request\"}".utf8))
                 } else {
                     readMore()
@@ -64,7 +72,7 @@ final class ControlServer: @unchecked Sendable {
     }
 
     private func respond(_ connection: NWConnection, status: Int, body: Data) {
-        let reason = [200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 408: "Request Timeout", 410: "Gone", 429: "Too Many Requests", 500: "Internal Server Error"][status] ?? "OK"
+        let reason = [200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 408: "Request Timeout", 409: "Conflict", 410: "Gone", 429: "Too Many Requests", 500: "Internal Server Error"][status] ?? "Error"
         var head = "HTTP/1.1 \(status) \(reason)\r\n"
         head += "Content-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\nServer: Teleport\r\n\r\n"
         connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in

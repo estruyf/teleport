@@ -126,7 +126,8 @@ public struct PairedHost: Codable, Identifiable, Hashable {
         self.pairedAt = pairedAt
     }
 
-    public var controlURL: URL { URL(string: "http://\(hostPart):\(port + 3)")! }
+    /// Nil when the address can't be part of a URL (a typo with a space in it, say).
+    public var controlURL: URL? { URL(string: "http://\(hostPart):\(port + 3)") }
     public var signalURL: String { "ws://\(hostPart):\(port)" }
     /// Bracketed when it looks like an IPv6 literal.
     var hostPart: String { address.contains(":") && !address.hasPrefix("[") ? "[\(address)]" : address }

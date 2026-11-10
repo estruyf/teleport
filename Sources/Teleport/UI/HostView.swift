@@ -225,6 +225,18 @@ struct HostView: View {
                 Notice(text: "macOS wants you to confirm this under Login Items.", kind: .info, action: ("Open Login Items", { SystemSettings.openLoginItems() }))
             }
             if let loginNotice { Notice(text: loginNotice, kind: .error) }
+            Toggle(isOn: Binding(get: { host.config.keepAliveEnabled }, set: { host.setKeepAlive($0) })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Keep this Mac from locking itself")
+                    Text("For a Mac that locks after some idle minutes, by its own settings or a company policy. While hosting, Teleport counts as someone using it, so it never goes idle. It can't unlock a Mac that is already locked.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+            if host.config.keepAliveEnabled, !host.hasAccessibility {
+                Notice(text: "Keeping this Mac awake needs Accessibility.", kind: .warning,
+                       action: ("Open System Settings", { SystemSettings.open("Privacy_Accessibility") }))
+            }
             if let signIn = host.signIn {
                 Divider()
                 afterRestart(signIn)

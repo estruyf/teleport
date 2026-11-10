@@ -91,6 +91,27 @@ final class LiveKitServer {
         }
     }
 
+    /// Disconnects a participant through the server's RoomService API.
+    func removeParticipant(_ identity: String) async {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(config.port)/twirp/livekit.RoomService/RemoveParticipant")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(AccessToken.admin(config: config))", forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["room": config.room, "identity": identity])
+        request.timeoutInterval = 5
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 200 {
+                Log.info("removed \(identity) from the room")
+            } else {
+                Log.warn("removing \(identity) failed: HTTP \(status) \(String(decoding: data, as: UTF8.self))")
+            }
+        } catch {
+            Log.warn("removing \(identity) failed: \(error)")
+        }
+    }
+
     private var pidFile: URL { TeleportConfig.directory.appendingPathComponent("livekit.pid") }
 
     /// A livekit-server left behind by a host that died would hold the ports, and it still has

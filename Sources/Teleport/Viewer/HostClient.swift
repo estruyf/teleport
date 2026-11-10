@@ -12,13 +12,15 @@ enum HostClient {
         return URLSession(configuration: config)
     }()
 
-    static func controlURL(address: String, port: Int) -> URL {
-        let host = address.contains(":") && !address.hasPrefix("[") ? "[\(address)]" : address
-        return URL(string: "http://\(host):\(port + 3)")!
+    static func controlURL(address: String, port: Int) throws -> URL {
+        guard let url = PairedHost(name: "", address: address, port: port, publicKey: "").controlURL else {
+            throw PairingError.unreachable("“\(address)” is not a valid address")
+        }
+        return url
     }
 
     static func info(address: String, port: Int, timeout: TimeInterval = 10) async throws -> HostInfo {
-        var request = URLRequest(url: controlURL(address: address, port: port).appendingPathComponent(ControlPath.info))
+        var request = URLRequest(url: try controlURL(address: address, port: port).appendingPathComponent(ControlPath.info))
         request.timeoutInterval = timeout
         return try await perform(request)
     }
@@ -33,7 +35,7 @@ enum HostClient {
 
         let payload = PairPayload(viewerName: name, viewerKey: identity.publicKeyHex)
         let request = PairRequest(viewerKey: identity.publicKeyHex, box: try PairingCrypto.seal(payload, with: key))
-        let response: PairResponse = try await post(controlURL(address: address, port: port).appendingPathComponent(ControlPath.pair), request)
+        let response: PairResponse = try await post(try controlURL(address: address, port: port).appendingPathComponent(ControlPath.pair), request)
         let result = try PairingCrypto.open(PairResult.self, response.box, with: key)
         return PairedHost(name: result.hostName, address: address, port: port, publicKey: info.publicKey)
     }
@@ -42,7 +44,7 @@ enum HostClient {
         let key = try PairingCrypto.key(identity, theirPublicHex: host.publicKey, salt: "", info: PairingCrypto.sessionInfo)
         let payload = TokenPayload(timestamp: Int(Date().timeIntervalSince1970), nonce: TeleportConfig.randomNonce())
         let request = TokenRequest(viewerKey: identity.publicKeyHex, box: try PairingCrypto.seal(payload, with: key))
-        let response: TokenResponse = try await post(host.controlURL.appendingPathComponent(ControlPath.token), request)
+        let response: TokenResponse = try await post(try controlURL(address: host.address, port: host.port).appendingPathComponent(ControlPath.token), request)
         return try PairingCrypto.open(TokenResult.self, response.box, with: key)
     }
 

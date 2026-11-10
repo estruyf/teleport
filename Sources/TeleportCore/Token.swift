@@ -4,6 +4,21 @@ import Foundation
 /// Mints LiveKit access tokens (HS256 JWTs) from the shared API key and secret.
 public enum AccessToken {
     public static func make(config: TeleportConfig, identity: String, ttl: TimeInterval = 24 * 3600) -> String {
+        sign(config: config, identity: identity, ttl: ttl, video: [
+            "room": config.room,
+            "roomJoin": true,
+            "canPublish": true,
+            "canSubscribe": true,
+            "canPublishData": true,
+        ])
+    }
+
+    /// For the server's own API (RoomService), e.g. to remove a revoked viewer.
+    public static func admin(config: TeleportConfig) -> String {
+        sign(config: config, identity: "teleport-admin", ttl: 60, video: ["room": config.room, "roomAdmin": true])
+    }
+
+    static func sign(config: TeleportConfig, identity: String, ttl: TimeInterval, video: [String: Any]) -> String {
         let now = Int(Date().timeIntervalSince1970)
         let header: [String: Any] = ["alg": "HS256", "typ": "JWT"]
         let claims: [String: Any] = [
@@ -12,13 +27,7 @@ public enum AccessToken {
             "name": identity,
             "nbf": now - 10,
             "exp": now + Int(ttl),
-            "video": [
-                "room": config.room,
-                "roomJoin": true,
-                "canPublish": true,
-                "canSubscribe": true,
-                "canPublishData": true,
-            ],
+            "video": video,
         ]
         let signingInput = base64URL(try! JSONSerialization.data(withJSONObject: header))
             + "." + base64URL(try! JSONSerialization.data(withJSONObject: claims))

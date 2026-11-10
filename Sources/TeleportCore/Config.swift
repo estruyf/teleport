@@ -28,9 +28,12 @@ public struct TeleportConfig: Codable {
     public var clipboardSync: Bool?
     /// Play a short sound when a portal opens or a Mac pairs. Nil means off.
     public var sounds: Bool?
+    /// Host: count as in use while hosting, so an idle-lock policy doesn't lock it. Nil means off.
+    public var keepAlive: Bool?
 
     public var clipboardSyncEnabled: Bool { clipboardSync ?? true }
     public var soundsEnabled: Bool { sounds ?? false }
+    public var keepAliveEnabled: Bool { keepAlive ?? false }
 
     public struct VirtualDisplayConfig: Codable {
         public var enabled: Bool
@@ -76,7 +79,8 @@ public struct TeleportConfig: Codable {
             virtualDisplay: .init(enabled: true, width: 1920, height: 1200, hiDPI: true),
             livekitServerPath: nil,
             clipboardSync: nil,
-            sounds: nil
+            sounds: nil,
+            keepAlive: nil
         )
         try? config.save()
         return config

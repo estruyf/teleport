@@ -31,7 +31,7 @@ open build/Teleport.app
 
 For another Mac: `npm run dist` builds a release zip in `dist/`; with `NOTARY_PROFILE` set (see `scripts/release.sh`) it is notarized and stapled so Gatekeeper accepts it.
 
-**Host (the office Mac):** choose *This Mac shares its apps*. Grant **Screen Recording** and **Accessibility** when asked (the window shows a notice with a button to System Settings while either is missing). Nothing is shared until you add apps under *Shared apps* (search installed apps, or drop an .app on the sheet). The host lives in the menu bar; the window reopens from there.
+**Host (the office Mac):** choose *This Mac shares its apps*. Grant **Screen Recording** and **Accessibility** when asked (the window shows a notice with a button to System Settings while either is missing). Nothing is shared until you add apps under *Shared apps* (search installed apps, or drop an .app on the sheet). The host lives in the menu bar; the window reopens from there. If this Mac locks itself after some idle minutes (its own settings or a company policy), switch on *Keep this Mac from locking itself*: while hosting, Teleport then counts as someone using it.
 
 **Viewer (the Mac you work on):** choose *This Mac shows remote apps*. Press *Pair a new Mac*; hosts on the same network or tailnet are listed, or type the address (shown on the host, Tailscale address first). Enter the 6-digit code from *Show pairing code* on the host. The host asks to allow; both sides show the same fingerprint. After that, *Connect* and open or launch apps.
 

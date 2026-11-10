@@ -49,9 +49,12 @@ public struct OpenRequest: Codable {
 public struct OpenResponse: Codable {
     public var trackName: String
     public var window: WindowInfo
-    public init(trackName: String, window: WindowInfo) {
+    /// Video pixels per window point (2 on a Retina display). Nil from hosts before 0.3.
+    public var scale: Double?
+    public init(trackName: String, window: WindowInfo, scale: Double? = nil) {
         self.trackName = trackName
         self.window = window
+        self.scale = scale
     }
 }
 
@@ -194,13 +197,26 @@ public struct QuitResponse: Codable {
 
 public struct IconRequest: Codable {
     public var bundleID: String
-    public init(bundleID: String) { self.bundleID = bundleID }
+    /// Pixel size wanted. Nil asks for the largest that fits one reply, which is all hosts before 0.3 send.
+    public var size: Int?
+    /// Which part of the base64 PNG to send, when it takes more than one reply.
+    public var part: Int?
+    public init(bundleID: String, size: Int? = nil, part: Int? = nil) {
+        self.bundleID = bundleID
+        self.size = size
+        self.part = part
+    }
 }
 
-/// PNG, base64; sized to fit LiveKit's 15 KB RPC reply limit.
+/// PNG, base64. A reply is capped at 15 KB, so a large icon comes in `parts` pieces.
 public struct IconResponse: Codable {
     public var png: String
-    public init(png: String) { self.png = png }
+    /// How many parts the whole icon has; nil means this is all of it.
+    public var parts: Int?
+    public init(png: String, parts: Int? = nil) {
+        self.png = png
+        self.parts = parts
+    }
 }
 
 // MARK: - Files and control
