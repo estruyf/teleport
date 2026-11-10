@@ -96,7 +96,9 @@ PLIST
 # Sign with a Developer ID when the keychain has one: its designated requirement is stable across
 # builds, so macOS keeps the Screen Recording and Accessibility grants. An ad-hoc signature changes
 # with every build (cdhash) and the grants would have to be redone each time.
-IDENTITY="${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')}"
+# `|| true`: with no Developer ID in the keychain grep matches nothing, and under pipefail that
+# would end the script here instead of falling through to the ad-hoc signature.
+IDENTITY="${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"' || true)}"
 if [ -n "$IDENTITY" ]; then
   codesign --force --deep --options runtime --entitlements "$ROOT/scripts/entitlements.plist" --sign "$IDENTITY" "$APP"
   echo "signed as $IDENTITY"
