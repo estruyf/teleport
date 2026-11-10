@@ -85,9 +85,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSScreenCaptureUsageDescription</key><string>Teleport streams your windows to your other Mac.</string>
   <key>NSLocalNetworkUsageDescription</key><string>Teleport connects to your other Macs on this network.</string>
   <key>NSBonjourServices</key><array><string>_teleport._tcp</string></array>
+  <!-- Arbitrary loads alone: with NSAllowsLocalNetworking beside it, macOS ignores
+       NSAllowsArbitraryLoads and blocks plain HTTP to Tailscale's 100.64/10 addresses. -->
   <key>NSAppTransportSecurity</key><dict>
     <key>NSAllowsArbitraryLoads</key><true/>
-    <key>NSAllowsLocalNetworking</key><true/>
   </dict>
 </dict></plist>
 PLIST
