@@ -31,6 +31,7 @@ final class LiveKitServer {
           \(config.apiKey): \(config.apiSecret)
         logging:
           level: warn
+        \(playoutDelayYAML)
         """
         let configURL = TeleportConfig.directory.appendingPathComponent("livekit.yaml")
         try yaml.write(to: configURL, atomically: true, encoding: .utf8)
@@ -61,6 +62,21 @@ final class LiveKitServer {
             stop()
             throw error
         }
+    }
+
+    /// `video.playoutDelayMs` for every room this server creates. The token's `roomConfig`
+    /// can't say 0 (the server treats min and max of 0 as "not set"), and 0 is the value that
+    /// asks the viewer to render frames as soon as they are decoded.
+    private var playoutDelayYAML: String {
+        guard let delay = config.videoTuning.playoutDelayMs else { return "" }
+        return """
+        room:
+          playout_delay:
+            enabled: true
+            min: \(delay)
+            max: \(delay)
+
+        """
     }
 
     func stop() {

@@ -134,10 +134,12 @@ final class Portal: NSObject {
     private func publish(to room: Room) async throws {
         let options = VideoPublishOptions(
             name: TrackName.forWindow(windowID),
-            screenShareEncoding: VideoEncoding(maxBitrate: 25_000_000, maxFps: 60),
+            screenShareEncoding: VideoEncoding(maxBitrate: tuning.maxBitrateKbps * 1000, maxFps: 60),
             simulcast: false,
-            preferredCodec: .h264,
-            degradationPreference: .maintainResolution
+            // When the SFU or the viewer won't take H.265, WebRTC negotiates the next codec it
+            // offers instead; stats.log shows which one it was.
+            preferredCodec: tuning.codec == .h265 ? .h265 : .h264,
+            degradationPreference: tuning.degradation == .maintainFramerateAndResolution ? .maintainFramerateAndResolution : .maintainResolution
         )
         publication = try await room.localParticipant.publish(videoTrack: track, options: options)
         Log.info("portal \(windowID) published (\(info.app) — \(info.title))")
