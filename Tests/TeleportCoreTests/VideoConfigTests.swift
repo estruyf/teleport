@@ -94,4 +94,26 @@ import Testing
         // Admin tokens never create the room for a join, so they stay as they were.
         #expect(try claims(AccessToken.admin(config: config))["roomConfig"] == nil)
     }
+
+    @Test func paintOverIsOffAndTheSDKEncodesByDefault() {
+        let tuning = VideoTuning(VideoConfig())
+        #expect(tuning.paintOver == false)
+        #expect(tuning.encoder == .webrtc)
+    }
+
+    @Test func paintOverBringsTeleportsEncoder() throws {
+        let tuning = try decode(video: #"{"paintOver": true, "encoder": "webrtc"}"#).videoTuning
+        #expect(tuning.encoder == .teleport)
+        #expect(tuning.paintOverDelayMs == 150)
+        #expect(tuning.paintOverFrames == 3)
+        #expect(tuning.problems.count == 1)
+    }
+
+    @Test func paintOverValuesAreKeptInRange() throws {
+        let tuning = try decode(video: #"{"paintOver": true, "paintOverFrames": 99, "paintOverMaxQP": 80, "motionMinArea": 3, "paintOverDelayMs": 1}"#).videoTuning
+        #expect(tuning.paintOverFrames == 10)
+        #expect(tuning.paintOverMaxQP == 51)
+        #expect(tuning.motionMinArea == 1)
+        #expect(tuning.paintOverDelayMs == 30)
+    }
 }

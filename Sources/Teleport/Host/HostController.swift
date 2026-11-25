@@ -145,6 +145,10 @@ final class HostController: NSObject, ObservableObject {
             state = .hosting
             Log.info("hosting on port \(config.port); allowed apps: \(config.allowedApps.joined(separator: ", "))")
             Self.logVideoTuning(config.videoTuning)
+            // Switched to host mode without a relaunch: main.swift didn't install it.
+            if config.videoTuning.encoder == .teleport, !TeleportEncoderFactory.installed {
+                Log.warn("video: encoder teleport takes effect after Teleport is quit and opened again")
+            }
         } catch {
             // Don't leave half of it running: a connected room or a held port makes the next Start fail too.
             await tearDown()

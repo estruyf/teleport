@@ -23,6 +23,8 @@ final class TrackStatsReporter: NSObject, TrackDelegate, @unchecked Sendable {
     private let label: String
     private let lock = NSLock()
     private var last: Counters?
+    /// More for the host's line, from outside WebRTC (the capture's frame kinds).
+    var extra: (@Sendable () -> String)?
 
     /// Cumulative counters from one report.
     private struct Counters {
@@ -90,7 +92,8 @@ final class TrackStatsReporter: NSObject, TrackDelegate, @unchecked Sendable {
             "pli=\(f0(d.pli))",
             "nack=\(f0(d.nack))",
             "rtt=\(pair?.currentRoundTripTime.map { f1($0 * 1000) } ?? "?")",
-        ].joined(separator: " ")
+            extra?() ?? "",
+        ].filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     private func viewerLine(_ inbound: InboundRtpStreamStatistics, _ stats: TrackStatistics) -> String? {
