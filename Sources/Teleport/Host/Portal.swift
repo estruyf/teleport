@@ -27,19 +27,23 @@ final class Portal: NSObject {
     private var movingDisplay = false
     private var restarts = 0
     private var lastRestart = Date.distantPast
+    private let tuning: VideoTuning
+    /// Held here: the SDK keeps track delegates weakly.
+    private var statsReporter: TrackStatsReporter?
 
     /// Called when the window disappears on the host.
     var onGone: ((Portal) -> Void)?
 
-    static func open(window: SCWindow, display: SCDisplay, room: Room) async throws -> Portal {
+    static func open(window: SCWindow, display: SCDisplay, room: Room, tuning: VideoTuning) async throws -> Portal {
         guard let app = window.owningApplication else { throw HostError("window has no owning app") }
         let size = Dimensions(width: Int32(window.frame.width * 2), height: Int32(window.frame.height * 2))
         let track = await LocalVideoTrack.createBufferTrack(
             name: TrackName.forWindow(window.windowID),
             source: .screenShareVideo,
-            options: BufferCaptureOptions(dimensions: size, fps: 60)
+            options: BufferCaptureOptions(dimensions: size, fps: 60),
+            reportStatistics: tuning.stats
         )
-        let portal = Portal(window: window, display: display, app: app, track: track)
+        let portal = Portal(window: window, display: display, app: app, track: track, tuning: tuning)
         do {
             try await portal.startCapture()
             try await portal.publish(to: room)
@@ -52,9 +56,10 @@ final class Portal: NSObject {
         return portal
     }
 
-    private init(window: SCWindow, display: SCDisplay, app: SCRunningApplication, track: LocalVideoTrack) {
+    private init(window: SCWindow, display: SCDisplay, app: SCRunningApplication, track: LocalVideoTrack, tuning: VideoTuning) {
         windowID = window.windowID
         pid = app.processID
+        self.tuning = tuning
         info = WindowCatalog.info(for: window)
         frame = window.frame
         self.display = display
@@ -62,6 +67,11 @@ final class Portal: NSObject {
         self.track = track
         output = FrameOutput(capturer: track.capturer as! BufferCapturer)
         super.init()
+        if tuning.stats {
+            let reporter = TrackStatsReporter(role: "host", label: "win=\(window.windowID)")
+            track.add(delegate: reporter)
+            statsReporter = reporter
+        }
         output.onStop = { [weak self] error in
             Task { @MainActor in self?.captureStopped(error) }
         }

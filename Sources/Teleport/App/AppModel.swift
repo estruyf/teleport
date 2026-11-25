@@ -61,6 +61,8 @@ final class AppModel: ObservableObject {
         case .viewer:
             let controller = ViewerController(identity: identity, deviceName: config.deviceName)
             controller.clipboardSyncEnabled = config.clipboardSyncEnabled
+            controller.statsEnabled = config.videoTuning.stats
+            HostController.logVideoTuning(config.videoTuning)
             controller.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
             viewer = controller
             NSApp.setActivationPolicy(.regular)

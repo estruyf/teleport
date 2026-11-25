@@ -144,6 +144,7 @@ final class HostController: NSObject, ObservableObject {
             if config.keepAliveEnabled { keepAlive.start() }
             state = .hosting
             Log.info("hosting on port \(config.port); allowed apps: \(config.allowedApps.joined(separator: ", "))")
+            Self.logVideoTuning(config.videoTuning)
         } catch {
             // Don't leave half of it running: a connected room or a held port makes the next Start fail too.
             await tearDown()
@@ -364,6 +365,12 @@ final class HostController: NSObject, ObservableObject {
         Task { await server.removeParticipant(identity) }
     }
 
+    /// The settings stats.log lines were made with, and any `video` keys that didn't parse.
+    static func logVideoTuning(_ tuning: VideoTuning) {
+        Log.info("video: \(tuning)")
+        for problem in tuning.problems { Log.warn(problem) }
+    }
+
     static func viewerIdentity(_ publicKey: String) -> String { "viewer-\(publicKey.prefix(8))" }
 
     private func handleControl(method: String, path: String, body: Data) async -> (Int, Data) {
@@ -525,7 +532,7 @@ final class HostController: NSObject, ObservableObject {
             try await Task.sleep(nanoseconds: 300_000_000)
             (window, display) = try await WindowCatalog.find(windowID)
         }
-        return try await Portal.open(window: window, display: display, room: room)
+        return try await Portal.open(window: window, display: display, room: room, tuning: config.videoTuning)
     }
 
     private func close(_ windowID: CGWindowID) async {

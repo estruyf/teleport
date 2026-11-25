@@ -20,6 +20,8 @@ final class PortalWindowController: NSWindowController, NSWindowDelegate, TrackD
     /// Set while this window resizes itself to the video, so that isn't sent back as a request.
     private var snapping = false
     private var lastResizeRequest = Date.distantPast
+    /// Held here: the SDK keeps track delegates weakly.
+    private var statsReporter: TrackStatsReporter?
 
     /// Border colour marking a window as remote; the Dock badge uses the same one.
     static let remoteColor = NSColor.systemTeal
@@ -65,8 +67,15 @@ final class PortalWindowController: NSWindowController, NSWindowDelegate, TrackD
 
     func attach(track: RemoteVideoTrack) {
         portalView.videoView.track?.remove(delegate: self)
+        if let statsReporter { portalView.videoView.track?.remove(delegate: statsReporter) }
         portalView.videoView.track = track
         track.add(delegate: self)
+        if viewer.statsEnabled {
+            let reporter = TrackStatsReporter(role: "viewer", label: "win=\(info.id)")
+            track.add(delegate: reporter)
+            statsReporter = reporter
+            Task { await track.set(reportStatistics: true) }
+        }
         scheduleSnap()
     }
 
@@ -81,6 +90,8 @@ final class PortalWindowController: NSWindowController, NSWindowDelegate, TrackD
         snapTimer?.invalidate()
         portalView.releaseHeldKeys()
         portalView.videoView.track?.remove(delegate: self)
+        if let statsReporter { portalView.videoView.track?.remove(delegate: statsReporter) }
+        statsReporter = nil
         portalView.videoView.track = nil
         super.close()
     }
