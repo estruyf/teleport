@@ -56,7 +56,8 @@ Granting Screen Recording makes macOS offer *Quit & Reopen*. That quits every in
 | `npm run start` | bundle and open the app |
 | `npm run start:loopback-host` | second instance as host, for testing on one Mac |
 | `npm run stop` | stop every Teleport process and livekit-server |
-| `npm run logs` / `logs:livekit` | follow the logs |
+| `npm run logs` / `logs:livekit` / `logs:stats` | follow the logs; `stats.log` needs `video.stats` |
+| `npm run test-pattern` | build and open the test-pattern window for measuring video ([docs/video-quality.md](docs/video-quality.md)) |
 | `npm run clean` | remove `.build` and `build` |
 
 ## Ports
@@ -69,13 +70,14 @@ All under `~/.teleport` (or `$TELEPORT_HOME`):
 
 - `config.json`: mode, name, port, shared apps, virtual display; on a host also its LiveKit key and secret (mode 600)
 - `device.key`: this Mac's private key (mode 600); `trust.json`: viewers the host allowed; `hosts.json`: hosts the viewer paired with
-- `app.log`, `livekit-server.log`, `livekit.pid`
+- `app.log`, `livekit-server.log`, `livekit.pid`; `stats.log` when `video.stats` is on
 - `dock-tiles/`: generated Dock tile stubs and icons
 
 ## Docs
 
 - [docs/release-checklist.md](docs/release-checklist.md): what is left for a first release
 - [docs/security.md](docs/security.md): the trust model, known gaps, and how Beam does linking
+- [docs/video-quality.md](docs/video-quality.md): measuring the video, the `video` settings, what is verified about them, and the A/B tests to run
 
 ## Status
 
