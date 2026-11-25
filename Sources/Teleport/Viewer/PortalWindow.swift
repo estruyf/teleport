@@ -79,8 +79,20 @@ final class PortalWindowController: NSWindowController, NSWindowDelegate, TrackD
         }
         if viewer.videoTuning.probe {
             detachProbe()
-            let probe = PatternProbe(label: "win=\(info.id)", scale: Double(scale ?? 2), correctionMs: viewer.videoTuning.probeClockCorrectionMs)
+            let fixed = viewer.videoTuning.probeClockCorrectionMs
+            let probe = PatternProbe(label: "win=\(info.id)", scale: Double(scale ?? 2), correctionMs: fixed ?? 0)
             self.probe = probe
+            if fixed == nil, let host = viewer.current {
+                let label = "win=\(info.id)"
+                Task.detached {
+                    guard let clock = await HostClient.clockOffset(of: host) else {
+                        StatsLog.write("probe-clock \(label) host didn't say its time; latencies assume the clocks agree")
+                        return
+                    }
+                    probe.set(correctionMs: clock.offsetMs)
+                    StatsLog.write("probe-clock \(label) host_ahead_ms=\(String(format: "%.1f", clock.offsetMs)) within_ms=\(String(format: "%.1f", clock.rttMs / 2))")
+                }
+            }
             // Attaching blocks until WebRTC's worker thread takes it; not on the main thread.
             Task.detached { track.add(videoRenderer: probe) }
         }

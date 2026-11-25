@@ -44,7 +44,7 @@ public struct VideoConfig: Codable, Equatable, Sendable {
     public var prioritizeSpeed: Bool?
     /// Viewer: read TeleportTestPattern's stamps from decoded frames and log latency and frame rate.
     public var probe: Bool?
-    /// Viewer: added to every latency the probe measures, for two Macs whose clocks differ, in ms.
+    /// Viewer: added to every latency the probe measures, in ms. Unset: measured from the host's clock.
     public var probeClockCorrectionMs: Int?
 
     /// Keys this section had that Teleport didn't understand; reported once at startup.
@@ -116,7 +116,7 @@ public struct VideoTuning: Equatable, Sendable, CustomStringConvertible {
     public var motionMinArea: Double
     public var prioritizeSpeed: Bool
     public var probe: Bool
-    public var probeClockCorrectionMs: Int
+    public var probeClockCorrectionMs: Int?
     public var problems: [String]
 
     public init(_ config: VideoConfig) {
@@ -136,7 +136,7 @@ public struct VideoTuning: Equatable, Sendable, CustomStringConvertible {
         motionMinArea = min(max(config.motionMinArea ?? 0.01, 0), 1)
         prioritizeSpeed = config.prioritizeSpeed ?? true
         probe = config.probe ?? false
-        probeClockCorrectionMs = config.probeClockCorrectionMs ?? 0
+        probeClockCorrectionMs = config.probeClockCorrectionMs
         problems = config.problems
         if config.paintOver == true, config.encoder == .webrtc {
             problems.append("video.paintOver needs encoder teleport; using it")
@@ -149,7 +149,7 @@ public struct VideoTuning: Equatable, Sendable, CustomStringConvertible {
             "stats=\(stats)", "codec=\(codec.rawValue)", "degradation=\(degradation.rawValue)",
             "maxBitrateKbps=\(maxBitrateKbps)", "playoutDelayMs=\(playoutDelayMs.map(String.init) ?? "unset")",
             "encoder=\(encoder.rawValue)\(encoder == .teleport ? " prioritizeSpeed=\(prioritizeSpeed)" : "")",
-            probe ? "probe clockCorrectionMs=\(probeClockCorrectionMs)" : "probe=false",
+            probe ? "probe clockCorrectionMs=\(probeClockCorrectionMs.map(String.init) ?? "measured")" : "probe=false",
             paintOver ? "paintOver delay=\(paintOverDelayMs)ms frames=\(paintOverFrames) maxQP=\(paintOverMaxQP) boost=\(paintOverBitrateBoost)x motionMinArea=\(motionMinArea)" : "paintOver=false",
         ].joined(separator: " ")
     }

@@ -383,7 +383,8 @@ final class HostController: NSObject, ObservableObject {
         }
         switch (method, path) {
         case ("GET", ControlPath.info):
-            return json(HostInfo(name: config.deviceName, publicKey: identity.publicKeyHex, version: TeleportVersion.string, port: config.port))
+            return json(HostInfo(name: config.deviceName, publicKey: identity.publicKeyHex, version: TeleportVersion.string, port: config.port,
+                                 timeMs: TestPattern.nowMs()))
 
         case ("POST", ControlPath.pair):
             guard let request = try? JSONDecoder().decode(PairRequest.self, from: body) else { return json(ControlError("bad request"), 400) }

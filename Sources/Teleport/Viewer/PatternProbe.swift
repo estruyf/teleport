@@ -9,10 +9,11 @@ import TeleportCore
 ///
 /// Latency runs from the host drawing the frame to this Mac decoding it: capture, encode, network,
 /// jitter buffer and decode, but not the two displays. On one Mac (a loopback test) both ends read
-/// the same clock; between two, add `video.probeClockCorrectionMs` (docs/video-quality.md).
+/// the same clock. Between two, the viewer measures the host's clock through its control endpoint;
+/// `video.probeClockCorrectionMs` overrides that (docs/video-quality.md).
 final class PatternProbe: NSObject, VideoRenderer, @unchecked Sendable {
     private let label: String
-    private let correctionMs: Int64
+    private var correctionMs: Int64
     private let lock = NSLock()
     private var scale: Double
     private var lastCounter: UInt32?
@@ -36,6 +37,13 @@ final class PatternProbe: NSObject, VideoRenderer, @unchecked Sendable {
         self.label = label
         self.scale = scale
         self.correctionMs = Int64(correctionMs)
+    }
+
+    /// How far the host's clock is ahead of this one; its stamps are that much late.
+    func set(correctionMs: Double) {
+        lock.lock()
+        self.correctionMs = Int64(correctionMs.rounded())
+        lock.unlock()
     }
 
     /// Video pixels per host point, once the viewer knows it.

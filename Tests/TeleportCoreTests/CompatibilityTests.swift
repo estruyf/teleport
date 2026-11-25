@@ -18,6 +18,13 @@ import Testing
         #expect(try OpenResponse.fromJSON(OpenResponse(trackName: "win-7", window: response.window, scale: 2).jsonString()).scale == 2)
     }
 
+    @Test func hostInfoFromAnOlderHostHasNoClock() throws {
+        let json = #"{"name":"Office","publicKey":"ab","version":"0.2.0","port":7880}"#
+        #expect(try JSONDecoder().decode(HostInfo.self, from: Data(json.utf8)).timeMs == nil)
+        let now = HostInfo(name: "Office", publicKey: "ab", version: "0.3.0", port: 7880, timeMs: 1_790_000_000_000)
+        #expect(try JSONDecoder().decode(HostInfo.self, from: JSONEncoder().encode(now)).timeMs == 1_790_000_000_000)
+    }
+
     @Test func iconMessagesStayCompatible() throws {
         // An older viewer sends only the bundle ID, and gets one PNG back.
         #expect(try IconRequest.fromJSON(#"{"bundleID":"a.b"}"#).size == nil)

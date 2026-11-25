@@ -13,11 +13,15 @@ public struct HostInfo: Codable {
     public var publicKey: String
     public var version: String
     public var port: Int
-    public init(name: String, publicKey: String, version: String, port: Int) {
+    /// The host's clock in ms, for the viewer's latency probe to line the two clocks up.
+    /// Nil from a host before 0.3.
+    public var timeMs: UInt64?
+    public init(name: String, publicKey: String, version: String, port: Int, timeMs: UInt64? = nil) {
         self.name = name
         self.publicKey = publicKey
         self.version = version
         self.port = port
+        self.timeMs = timeMs
     }
 }
 
