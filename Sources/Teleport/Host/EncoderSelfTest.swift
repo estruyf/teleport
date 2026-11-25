@@ -84,12 +84,26 @@ enum EncoderSelfTest {
         }
 
         /// Encodes, decodes and compares; nil PSNR when it was dropped or didn't decode.
+        /// The stamp read back from the last decoded picture, as the viewer's probe reads it.
+        var lastRead: TestPattern.Stamp?
+
         func round(_ buffer: CVPixelBuffer, _ kind: FrameKind?, key: Bool = false) -> (out: EncodedVideoFrame?, psnr: Double?, annexB: Bool) {
             guard let out = encode(buffer, kind, key: key) else { return (nil, nil, true) }
             let units = AnnexBReader.units(out.data)
             let annexB = !units.isEmpty && out.data.starts(with: [0, 0, 0, 1])
-            let psnr = decoder.decode(units, key: out.frameType == .key).map { Content.lumaPSNR(buffer, $0, width: width, height: height) }
+            let picture = decoder.decode(units, key: out.frameType == .key)
+            lastRead = picture.flatMap(Self.readStamp)
+            let psnr = picture.map { Content.lumaPSNR(buffer, $0, width: width, height: height) }
             return (out, psnr, annexB)
+        }
+
+        private static func readStamp(_ picture: CVPixelBuffer) -> TestPattern.Stamp? {
+            CVPixelBufferLockBaseAddress(picture, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(picture, .readOnly) }
+            guard let base = CVPixelBufferGetBaseAddressOfPlane(picture, 0) else { return nil }
+            let luma = base.assumingMemoryBound(to: UInt8.self)
+            let stride = CVPixelBufferGetBytesPerRowOfPlane(picture, 0)
+            return TestPattern.read(scale: 2) { x, y in luma[y * stride + x] }
         }
     }
 
@@ -98,15 +112,27 @@ enum EncoderSelfTest {
     private static func check(hevc: Bool, kbps: UInt32, width: Int, height: Int, tuning: VideoTuning, content: Content) -> Int? {
         guard let harness = Harness(hevc: hevc, kbps: kbps, width: width, height: height, tuning: tuning) else { return nil }
         var failures = 0
+        var unreadable = 0
+        var decodedFrames = 0
         func step(_ label: String, _ buffer: CVPixelBuffer, _ kind: FrameKind?, key: Bool = false) {
             let (result, decoded, wellFormed) = harness.round(buffer, kind, key: key)
             guard let out = result else {
                 print(String(format: "  %-20@ dropped by VideoToolbox", label as NSString))
                 return
             }
-            let psnr = decoded.map { String(format: "%.2f dB", $0) } ?? "DECODE FAILED"
-            if decoded == nil { failures += 1 }
+            var psnr = decoded.map { String(format: "%.2f dB", $0) } ?? "DECODE FAILED"
+            if decoded == nil { failures += 1 } else { decodedFrames += 1 }
             if !wellFormed { failures += 1 }
+            // The probe must read the stamp that was drawn, or nothing; never a wrong one.
+            if let read = harness.lastRead {
+                if read != Content.lastStamp {
+                    failures += 1
+                    psnr += "  WRONG STAMP"
+                }
+            } else {
+                unreadable += 1
+                psnr += "  stamp unreadable"
+            }
             print(String(format: "  %-20@ %8.1f KB  %@  %@  rtp=%u%@", label as NSString, Double(out.data.count) / 1024, psnr as NSString,
                          (out.frameType == .key ? "key  " : "delta") as NSString, out.rtpTimestamp, wellFormed ? "" : "  NOT ANNEX B"))
         }
@@ -129,6 +155,7 @@ enum EncoderSelfTest {
         for i in 1 ... tuning.paintOverFrames { step("still after key \(i)", content.frame(offset: offset), .still) }
 
         _ = harness.encoder.releaseEncoder()
+        print("  test-pattern stamp read back from \(decodedFrames - unreadable) of \(decodedFrames) decoded frames")
         return failures
     }
 
@@ -208,6 +235,17 @@ private struct Content {
         self.luma = luma
     }
 
+    /// Frames counted so far; each frame carries the next stamp, as TeleportTestPattern draws it.
+    private static let counter = Counter()
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: UInt32 = 0
+        func next() -> UInt32 { lock.lock(); defer { lock.unlock() }; value += 1; return value }
+    }
+
+    /// The stamp drawn into the last frame made.
+    nonisolated(unsafe) static var lastStamp: TestPattern.Stamp?
+
     func frame(offset: Int) -> CVPixelBuffer {
         var buffer: CVPixelBuffer?
         CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
@@ -218,6 +256,19 @@ private struct Content {
         let stride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
         luma.withUnsafeBufferPointer { src in
             for row in 0 ..< height { memcpy(y + row * stride, src.baseAddress! + (row + offset) * width, width) }
+        }
+        // The test pattern's stamp at 2x, on its white surround, as TeleportTestPattern draws it.
+        let stamp = TestPattern.Stamp(counter: Self.counter.next(), timeMs: TestPattern.nowMs(), mode: .text)
+        Self.lastStamp = stamp
+        let block = Int(TestPattern.block * 2)
+        for row in Int(TestPattern.originY * 2) - 12 ..< Int(TestPattern.originY * 2) + TestPattern.rows * block + 12 {
+            memset(y + row * stride + Int(TestPattern.originX * 2) - 12, 235, TestPattern.columns * block + 24)
+        }
+        for (index, bit) in TestPattern.bits(stamp).enumerated() where bit {
+            let center = TestPattern.center(of: index)
+            for row in Int(center.y * 2) - block / 2 ..< Int(center.y * 2) + block / 2 {
+                memset(y + row * stride + Int(center.x * 2) - block / 2, 16, block)
+            }
         }
         let uv = CVPixelBufferGetBaseAddressOfPlane(pb, 1)!
         memset(uv, 128, CVPixelBufferGetBytesPerRowOfPlane(pb, 1) * height / 2)

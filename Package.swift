@@ -19,6 +19,8 @@ let package = Package(
         ),
         // One copy of this runs per remote app, so it gets its own badged Dock icon.
         .executableTarget(name: "TeleportDockTile", dependencies: ["TeleportCore"]),
+        // A window that stamps its frames, for measuring latency and frame rate end to end.
+        .executableTarget(name: "TeleportTestPattern", dependencies: ["TeleportCore"]),
         .testTarget(name: "TeleportCoreTests", dependencies: ["TeleportCore"]),
     ]
 )

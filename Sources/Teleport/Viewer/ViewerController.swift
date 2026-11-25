@@ -42,8 +42,8 @@ final class ViewerController: NSObject, ObservableObject {
     /// Windows that were open when the connection dropped; reopened after a reconnect.
     private var reopenAfterReconnect: [WindowInfo] = []
     var clipboardSyncEnabled = true
-    /// Write each portal's decode statistics to stats.log (`video.stats`).
-    var statsEnabled = false
+    /// The `video` settings that apply to a viewer: stats and the measurement probe.
+    var videoTuning = VideoTuning(VideoConfig())
 
     var connected: Bool { if case .connected = state { true } else { false } }
 
