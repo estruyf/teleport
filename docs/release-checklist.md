@@ -4,6 +4,7 @@ What is still missing for a 0.1 that Elio can put on the office Mac and use ever
 
 ## Must
 
+- [ ] **Video on the two Macs, measured.** Run the A/B list at the end of [video-quality.md](video-quality.md) with the test pattern: worst-second fps and p50/p99 latency per mode, for the baseline and each variant. Settle the defaults from the numbers; at 3840×2400 H.264 may not reach 60 fps on the host's encoder at all.
 - [ ] **Real two-Mac test.** Everything so far ran on one Mac. On the headless office Mac: the virtual display appears and gets its Retina mode, windows move onto it, capture is sharp, clicks land where they were aimed, resize follows, Launch and New window work for VS Code, Edge, Chrome, Terminal, Ghostty, Seshboard. Fallback if the Stage misbehaves: an HDMI dummy plug.
 - [ ] **Popups and menus.** Confirm dropdowns, context menus and autocomplete show up in portals (the app-wide capture cropped to the window is meant to carry them). The menu bar of a remote app is not in the window; decide whether to live with shortcuts or add a menu strip later.
 - [ ] **Keyboard edge cases.** Belgian/US layouts, dead keys, Fn and media keys, ⌘Tab and ⌘Space staying local, modifier state after focus changes.
@@ -22,6 +23,8 @@ What is still missing for a 0.1 that Elio can put on the office Mac and use ever
 - [x] **Clipboard sync**, both directions, text first.
 - [ ] **Security hardening** from [security.md](security.md): at least the TLS proxy before using a plain LAN you don't control.
 - [ ] **Dock tile polish.** Confirm the stub's icon and name show reliably, bouncing and badge, and that tiles vanish when the viewer quits.
+- [ ] **Paint-over, decided.** Keep `video.paintOver` off until the two-Mac runs show it sharpens without latency spikes when motion resumes; then make it the default or remove it with Teleport's encoder. Open questions are in [video-quality.md](video-quality.md).
+- [ ] **`npm run test` with Xcode installed.** It points `swift test` at the Command Line Tools' testing plugin, which fails when Xcode is the active toolchain; plain `swift test` (as CI runs it) works.
 - [ ] **Updates.** Sparkle with an appcast, as Beam does, once there is a place to host releases.
 
 ## Later

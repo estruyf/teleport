@@ -25,6 +25,23 @@ enum HostClient {
         return try await perform(request)
     }
 
+    /// How far the host's clock is ahead of this Mac's, in ms, NTP-style: the host's time against
+    /// the middle of the request, from the fastest of a few tries, so the error is at most half
+    /// that round trip (shown as `rttMs`). Nil when the host doesn't say its time.
+    static func clockOffset(of host: PairedHost) async -> (offsetMs: Double, rttMs: Double)? {
+        var best: (offsetMs: Double, rttMs: Double)?
+        for _ in 0 ..< 5 {
+            let sent = Double(TestPattern.nowMs())
+            guard let info = try? await info(address: host.address, port: host.port, timeout: 3), let hostMs = info.timeMs else { return best }
+            let received = Double(TestPattern.nowMs())
+            let rtt = received - sent
+            if best == nil || rtt < best!.rttMs {
+                best = (Double(hostMs) - (sent + received) / 2, rtt)
+            }
+        }
+        return best
+    }
+
     /// Returns the fingerprint to show while the host decides, then the paired host once it allows.
     static func pair(address: String, port: Int, code: String, identity: DeviceIdentity, name: String,
                      showFingerprint: @MainActor (String) -> Void) async throws -> PairedHost

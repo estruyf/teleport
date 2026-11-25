@@ -30,10 +30,13 @@ public struct TeleportConfig: Codable {
     public var sounds: Bool?
     /// Host: count as in use while hosting, so an idle-lock policy doesn't lock it. Nil means off.
     public var keepAlive: Bool?
+    /// Video tuning for A/B tests, edited by hand; see `docs/video-quality.md`. Nil means today's behaviour.
+    public var video: VideoConfig? = nil
 
     public var clipboardSyncEnabled: Bool { clipboardSync ?? true }
     public var soundsEnabled: Bool { sounds ?? false }
     public var keepAliveEnabled: Bool { keepAlive ?? false }
+    public var videoTuning: VideoTuning { VideoTuning(video ?? VideoConfig()) }
 
     public struct VirtualDisplayConfig: Codable {
         public var enabled: Bool

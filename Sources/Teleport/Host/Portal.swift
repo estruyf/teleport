@@ -27,19 +27,23 @@ final class Portal: NSObject {
     private var movingDisplay = false
     private var restarts = 0
     private var lastRestart = Date.distantPast
+    private let tuning: VideoTuning
+    /// Held here: the SDK keeps track delegates weakly.
+    private var statsReporter: TrackStatsReporter?
 
     /// Called when the window disappears on the host.
     var onGone: ((Portal) -> Void)?
 
-    static func open(window: SCWindow, display: SCDisplay, room: Room) async throws -> Portal {
+    static func open(window: SCWindow, display: SCDisplay, room: Room, tuning: VideoTuning) async throws -> Portal {
         guard let app = window.owningApplication else { throw HostError("window has no owning app") }
         let size = Dimensions(width: Int32(window.frame.width * 2), height: Int32(window.frame.height * 2))
         let track = await LocalVideoTrack.createBufferTrack(
             name: TrackName.forWindow(window.windowID),
             source: .screenShareVideo,
-            options: BufferCaptureOptions(dimensions: size, fps: 60)
+            options: BufferCaptureOptions(dimensions: size, fps: 60),
+            reportStatistics: tuning.stats
         )
-        let portal = Portal(window: window, display: display, app: app, track: track)
+        let portal = Portal(window: window, display: display, app: app, track: track, tuning: tuning)
         do {
             try await portal.startCapture()
             try await portal.publish(to: room)
@@ -52,16 +56,23 @@ final class Portal: NSObject {
         return portal
     }
 
-    private init(window: SCWindow, display: SCDisplay, app: SCRunningApplication, track: LocalVideoTrack) {
+    private init(window: SCWindow, display: SCDisplay, app: SCRunningApplication, track: LocalVideoTrack, tuning: VideoTuning) {
         windowID = window.windowID
         pid = app.processID
+        self.tuning = tuning
         info = WindowCatalog.info(for: window)
         frame = window.frame
         self.display = display
         self.app = app
         self.track = track
-        output = FrameOutput(capturer: track.capturer as! BufferCapturer)
+        output = FrameOutput(capturer: track.capturer as! BufferCapturer, paintOver: tuning.paintOver ? PaintOverPlan(tuning) : nil, windowID: window.windowID)
         super.init()
+        if tuning.stats {
+            let reporter = TrackStatsReporter(role: "host", label: "win=\(window.windowID)")
+            if tuning.paintOver { reporter.extra = { [output] in output.takeCounts() } }
+            track.add(delegate: reporter)
+            statsReporter = reporter
+        }
         output.onStop = { [weak self] error in
             Task { @MainActor in self?.captureStopped(error) }
         }
@@ -124,10 +135,12 @@ final class Portal: NSObject {
     private func publish(to room: Room) async throws {
         let options = VideoPublishOptions(
             name: TrackName.forWindow(windowID),
-            screenShareEncoding: VideoEncoding(maxBitrate: 25_000_000, maxFps: 60),
+            screenShareEncoding: VideoEncoding(maxBitrate: tuning.maxBitrateKbps * 1000, maxFps: 60),
             simulcast: false,
-            preferredCodec: .h264,
-            degradationPreference: .maintainResolution
+            // When the SFU or the viewer won't take H.265, WebRTC negotiates the next codec it
+            // offers instead; stats.log shows which one it was.
+            preferredCodec: tuning.codec == .h265 ? .h265 : .h264,
+            degradationPreference: tuning.degradation == .maintainFramerateAndResolution ? .maintainFramerateAndResolution : .maintainResolution
         )
         publication = try await room.localParticipant.publish(videoTrack: track, options: options)
         Log.info("portal \(windowID) published (\(info.app) — \(info.title))")
@@ -219,10 +232,33 @@ final class Portal: NSObject {
     }
 }
 
+/// When and how a portal paints over (`video.paintOver`).
+struct PaintOverPlan {
+    var delay: TimeInterval
+    var frames: Int
+    var motionMinArea: Double
+    /// Between the frames of one paint-over: two frame times, so WebRTC's 60 fps limit doesn't drop one.
+    var spacing: TimeInterval = 2.0 / 60
+    /// Small changes alone (typing, a spinner) repaint at most this often; motion repaints as soon as it stops.
+    var smallChangeInterval: TimeInterval = 1
+
+    init(_ tuning: VideoTuning) {
+        delay = Double(tuning.paintOverDelayMs) / 1000
+        frames = tuning.paintOverFrames
+        motionMinArea = tuning.motionMinArea
+    }
+}
+
 /// Receives ScreenCaptureKit frames and feeds them to the LiveKit capturer.
+///
+/// With a paint-over plan it also tells motion from small changes, by how much of the frame
+/// ScreenCaptureKit marks dirty, and once the window has held still it re-sends the last frame a
+/// few times tagged `.paintOver`; `TeleportEncoder` encodes those sharper.
 final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     let queue = DispatchQueue(label: "teleport.capture", qos: .userInteractive)
     private let capturer: BufferCapturer
+    private let paintOver: PaintOverPlan?
+    private let windowID: CGWindowID
     private var lastBuffer: CVPixelBuffer?
     private var lastFrameAt = Date.distantPast
     private var lastRefreshAt = Date.distantPast
@@ -232,8 +268,25 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked 
     private var firstFrame: CheckedContinuation<Void, Error>?
     private var hasFrame = false
 
-    init(capturer: BufferCapturer) {
+    // Paint-over state, on `queue`.
+    private var lastMotionAt = Date.distantPast
+    private var lastBurstAt = Date.distantPast
+    private var lastPaintOverFrameAt = Date.distantPast
+    private var motionSinceBurst = false
+    private var changedSinceBurst = false
+    private var burstLeft = 0
+    /// When the pending check fires; a newer, earlier one replaces it.
+    private var checkAt: Date?
+    private var checkGeneration = 0
+    private var dirtyRectSamples = 0
+    /// For stats.log; read from the stats reporter's thread.
+    private let countsLock = NSLock()
+    private var counts = (motion: 0, change: 0, paintOver: 0)
+
+    init(capturer: BufferCapturer, paintOver: PaintOverPlan? = nil, windowID: CGWindowID = 0) {
         self.capturer = capturer
+        self.paintOver = paintOver
+        self.windowID = windowID
     }
 
     func waitForFirstFrame(timeout: TimeInterval) async throws {
@@ -257,6 +310,11 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked 
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
         else { return }
 
+        if let paintOver, let info = attachments.first {
+            let kind: FrameKind = changedShare(info, pixelBuffer) >= paintOver.motionMinArea ? .motion : .change
+            kind.tag(pixelBuffer)
+            noteChange(kind)
+        }
         capturer.capture(pixelBuffer)
         lastBuffer = pixelBuffer
         lastFrameAt = Date()
@@ -266,23 +324,120 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked 
             firstFrame?.resume()
             firstFrame = nil
         }
+        if paintOver != nil { schedulePaintOverCheck() }
     }
 
     /// ScreenCaptureKit stops sending frames when nothing changes. Keep re-sending the last one:
     /// a quick burst so the encoder sharpens a static window, then once a second, so a viewer that
     /// lost a packet or just subscribed gets a fresh keyframe instead of a frozen or blurry picture.
+    /// A paint-over replaces the quick burst.
     func refreshIfIdle() {
         queue.async {
             let now = Date()
-            let interval = self.idleRefreshes < 8 ? 0.2 : 1.0
+            let interval = self.idleRefreshes < 8 && self.paintOver == nil ? 0.2 : 1.0
             guard let buffer = self.lastBuffer,
                   now.timeIntervalSince(self.lastFrameAt) > 0.2,
-                  now.timeIntervalSince(self.lastRefreshAt) >= interval
+                  now.timeIntervalSince(self.lastRefreshAt) >= interval,
+                  self.burstLeft == 0
             else { return }
             self.idleRefreshes += 1
             self.lastRefreshAt = now
+            // The buffer may still carry the tag of the last paint-over.
+            if self.paintOver != nil { FrameKind.still.tag(buffer) }
             self.capturer.capture(buffer)
         }
+    }
+
+    /// Stats.log's view of the capture: frames of each kind since the last call.
+    func takeCounts() -> String {
+        countsLock.lock()
+        defer { countsLock.unlock() }
+        defer { counts = (0, 0, 0) }
+        return "cap_motion=\(counts.motion) cap_change=\(counts.change) cap_paintover=\(counts.paintOver)"
+    }
+
+    // MARK: - Paint-over
+
+    /// Share of the frame ScreenCaptureKit marked as changed (0–1). No list means it doesn't
+    /// know, so that counts as everything. The rects are in pixels (SCStream.h); the header says
+    /// NSValue, other code reads CGRect dictionaries, so both are taken.
+    private func changedShare(_ info: [SCStreamFrameInfo: Any], _ buffer: CVPixelBuffer) -> Double {
+        let bounds = CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer))
+        guard let list = info[.dirtyRects] as? [Any] else { return 1 }
+        let rects = list.compactMap { item -> CGRect? in
+            if let value = item as? NSValue, !(item is NSDictionary) { return value.rectValue }
+            return (item as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
+        }
+        // The first few, in the log, to check the rects are in this buffer's pixels.
+        if dirtyRectSamples < 3, !rects.isEmpty {
+            dirtyRectSamples += 1
+            let content = (info[.contentRect] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
+            Log.info("portal \(windowID) dirty rects \(rects.prefix(4).map { "\($0)" }.joined(separator: " ")) in \(Int(bounds.width))x\(Int(bounds.height)), content \(content.map { "\($0)" } ?? "?")")
+        }
+        let area = rects.reduce(0.0) { sum, rect in
+            let visible = rect.intersection(bounds)
+            return visible.isNull ? sum : sum + Double(visible.width * visible.height)
+        }
+        return min(1, area / Double(max(1, bounds.width * bounds.height)))
+    }
+
+    private func noteChange(_ kind: FrameKind) {
+        countsLock.lock()
+        if kind == .motion { counts.motion += 1 } else { counts.change += 1 }
+        countsLock.unlock()
+        if kind == .motion {
+            lastMotionAt = Date()
+            motionSinceBurst = true
+            // Moving again: a paint-over now would be wasted on a picture about to change.
+            burstLeft = 0
+        }
+        changedSinceBurst = true
+    }
+
+    /// When the next paint-over frame may go out.
+    private func nextPaintOver(_ plan: PaintOverPlan) -> Date {
+        if burstLeft > 0 { return lastPaintOverFrameAt.addingTimeInterval(plan.spacing) }
+        var due = lastMotionAt.addingTimeInterval(plan.delay)
+        if !motionSinceBurst { due = max(due, lastBurstAt.addingTimeInterval(plan.smallChangeInterval)) }
+        return due
+    }
+
+    private func schedulePaintOverCheck() {
+        guard let plan = paintOver, changedSinceBurst || burstLeft > 0 else { return }
+        let due = nextPaintOver(plan)
+        // A check already due sooner covers this one. One due later (a small change waiting out
+        // its interval) must not hold back the paint-over after motion that just stopped.
+        if let checkAt, checkAt <= due { return }
+        checkAt = due
+        checkGeneration += 1
+        let generation = checkGeneration
+        queue.asyncAfter(deadline: .now() + max(0, due.timeIntervalSinceNow)) { [weak self] in
+            guard let self, generation == self.checkGeneration else { return }
+            self.checkAt = nil
+            self.paintOverTick()
+        }
+    }
+
+    private func paintOverTick() {
+        guard let plan = paintOver, let buffer = lastBuffer else { return }
+        if burstLeft == 0 {
+            guard changedSinceBurst else { return }
+            guard Date() >= nextPaintOver(plan) else { return schedulePaintOverCheck() }
+            burstLeft = plan.frames
+            changedSinceBurst = false
+            motionSinceBurst = false
+            lastBurstAt = Date()
+        } else if Date() < nextPaintOver(plan) {
+            return schedulePaintOverCheck()
+        }
+        FrameKind.paintOver.tag(buffer)
+        capturer.capture(buffer)
+        burstLeft -= 1
+        lastPaintOverFrameAt = Date()
+        countsLock.lock()
+        counts.paintOver += 1
+        countsLock.unlock()
+        schedulePaintOverCheck()
     }
 
     func stream(_: SCStream, didStopWithError error: Error) {

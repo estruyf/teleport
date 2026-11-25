@@ -13,6 +13,8 @@
     "start:release": "npm run bundle:release && open build/Teleport.app",
     "logs": "tail -f ~/.teleport/app.log",
     "logs:livekit": "tail -f ~/.teleport/livekit-server.log",
+    "test-pattern": "scripts/test-pattern.sh && open \"build/Teleport Test Pattern.app\"",
+    "logs:stats": "tail -F ${TELEPORT_HOME:-$HOME/.teleport}/stats.log",
     "stop": "pkill -x Teleport; pkill -x TeleportDockTile; pkill -f 'livekit-server --config' || true",
     "clean": "rm -rf .build build",
     "deps": "brew list livekit >/dev/null 2>&1 || brew install livekit",

@@ -144,6 +144,11 @@ final class HostController: NSObject, ObservableObject {
             if config.keepAliveEnabled { keepAlive.start() }
             state = .hosting
             Log.info("hosting on port \(config.port); allowed apps: \(config.allowedApps.joined(separator: ", "))")
+            Self.logVideoTuning(config.videoTuning)
+            // Switched to host mode without a relaunch: main.swift didn't install it.
+            if config.videoTuning.encoder == .teleport, !TeleportEncoderFactory.installed {
+                Log.warn("video: encoder teleport takes effect after Teleport is quit and opened again")
+            }
         } catch {
             // Don't leave half of it running: a connected room or a held port makes the next Start fail too.
             await tearDown()
@@ -364,6 +369,12 @@ final class HostController: NSObject, ObservableObject {
         Task { await server.removeParticipant(identity) }
     }
 
+    /// The settings stats.log lines were made with, and any `video` keys that didn't parse.
+    static func logVideoTuning(_ tuning: VideoTuning) {
+        Log.info("video: \(tuning)")
+        for problem in tuning.problems { Log.warn(problem) }
+    }
+
     static func viewerIdentity(_ publicKey: String) -> String { "viewer-\(publicKey.prefix(8))" }
 
     private func handleControl(method: String, path: String, body: Data) async -> (Int, Data) {
@@ -372,7 +383,8 @@ final class HostController: NSObject, ObservableObject {
         }
         switch (method, path) {
         case ("GET", ControlPath.info):
-            return json(HostInfo(name: config.deviceName, publicKey: identity.publicKeyHex, version: TeleportVersion.string, port: config.port))
+            return json(HostInfo(name: config.deviceName, publicKey: identity.publicKeyHex, version: TeleportVersion.string, port: config.port,
+                                 timeMs: TestPattern.nowMs()))
 
         case ("POST", ControlPath.pair):
             guard let request = try? JSONDecoder().decode(PairRequest.self, from: body) else { return json(ControlError("bad request"), 400) }
@@ -525,7 +537,7 @@ final class HostController: NSObject, ObservableObject {
             try await Task.sleep(nanoseconds: 300_000_000)
             (window, display) = try await WindowCatalog.find(windowID)
         }
-        return try await Portal.open(window: window, display: display, room: room)
+        return try await Portal.open(window: window, display: display, room: room, tuning: config.videoTuning)
     }
 
     private func close(_ windowID: CGWindowID) async {

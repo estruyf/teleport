@@ -90,7 +90,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 }
 
+// A check of Teleport's encoder on this Mac's VideoToolbox; prints and exits, starts nothing.
+if let index = CommandLine.arguments.firstIndex(of: "--encoder-selftest") {
+    exit(EncoderSelfTest.run(Array(CommandLine.arguments.dropFirst(index + 1))))
+}
+
 Log.setup(role: "app")
+
+// Teleport's own encoder has to be registered before anything else touches the LiveKit SDK.
+if let config = try? TeleportConfig.load(), config.mode == .host, config.videoTuning.encoder == .teleport {
+    TeleportEncoderFactory.install(config.videoTuning)
+}
 
 // Ctrl-C / kill should take livekit-server down with us; AppKit doesn't handle signals itself.
 nonisolated(unsafe) var signalSources: [DispatchSourceSignal] = []
