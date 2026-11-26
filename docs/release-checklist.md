@@ -1,6 +1,6 @@
-# First release
+# Roadmap
 
-What is still missing for a 0.1 that Elio can put on the office Mac and use every day. Ordered: blockers first.
+What's done and what's still open for Teleport to be something to put on a remote Mac and use every day. 0.1.0 is out; the open items below are ordered blockers first.
 
 ## Must
 

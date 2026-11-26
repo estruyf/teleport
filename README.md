@@ -6,8 +6,9 @@
 
 **Use the apps on another Mac as if they were right here.**
 
-Teleport streams individual app windows from a Mac in the office (with or without a screen) to the Mac you work on. Each remote window becomes a native window with its own Dock icon, and takes your keyboard, mouse and dropped files. Think Parallels Coherence, but the apps run on another Mac.
+Teleport streams individual app windows from a remote Mac (with or without a screen) to the Mac you work on. Each remote window becomes a native window with its own Dock icon, and takes your keyboard, mouse and dropped files. Think Parallels Coherence, but the apps run on another Mac.
 
+[![Release](https://img.shields.io/github/v/release/estruyf/teleport?color=6E56CF)](https://github.com/estruyf/teleport/releases/latest)
 [![CI](https://github.com/estruyf/teleport/actions/workflows/ci.yml/badge.svg)](https://github.com/estruyf/teleport/actions/workflows/ci.yml)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-6E56CF)
 ![Swift 5.10](https://img.shields.io/badge/Swift-5.10-F05138?logo=swift&logoColor=white)
@@ -19,7 +20,9 @@ Teleport streams individual app windows from a Mac in the office (with or withou
 
 ## Why
 
-Some apps only run on one machine: the Mac with the company VPN, the licence, the build cache or the big GPU. Screen Sharing gives you that whole desktop in one window. Teleport gives you only the apps you need, as normal windows next to your own, on the Mac you're sitting at.
+I work on a remote Mac, and most of the time I only need one app from it. Opening a full remote desktop for that means a second desktop in a window, with its own Dock, menu bar and windows I don't need, all to get to that one app.
+
+Teleport fixes that. I open just the app I need, and it shows up as a normal window on the Mac I'm sitting at, next to my own apps, with its own Dock icon. I type, click and drag files into it as if it ran locally, and the rest of the remote Mac stays out of the way.
 
 ## Features
 
@@ -61,7 +64,7 @@ Or download `Teleport-<version>-arm64-mac.zip` from the [latest release](https:/
 
 Then:
 
-1. **On the host** (the office Mac): choose *Share this Mac's apps*, grant **Screen Recording** and **Accessibility**, and add the apps you want to share.
+1. **On the host** (the remote Mac): choose *Share this Mac's apps*, grant **Screen Recording** and **Accessibility**, and add the apps you want to share.
 2. **On the viewer** (your Mac): choose *Use apps from another Mac* and press *Pair a new Mac*.
 3. **Pair**: press *Show pairing code* on the host, type it on the viewer, check that both Macs show the same fingerprint and press *Allow*.
 4. **Open a portal**: connect, then pick a window or launch an app.
@@ -98,11 +101,11 @@ The host runs a [LiveKit](https://livekit.io) server and streams each opened win
 | [Security](docs/security.md) | The trust model and its known gaps |
 | [Video quality](docs/video-quality.md) | Measuring the video, the `video` settings and the A/B tests to run |
 | [Changelog](CHANGELOG.md) | What changed in each release |
-| [Release checklist](docs/release-checklist.md) | What's left before a first release |
+| [Roadmap](docs/release-checklist.md) | What's still open, blockers first |
 
 ## Status
 
-Teleport is early. Pairing, discovery, streaming, input, resize, clipboard text, Dock tiles, reconnect, the login item, remote launch and quit, notarized releases and in-app updates all work. Not yet verified on a headless Mac. Not there yet: TLS on the signalling socket (Tailscale covers it today; see [security](docs/security.md)), audio, HEVC 4:4:4 and Intel builds. The [release checklist](docs/release-checklist.md) has the full list.
+Teleport is early: 0.1.0 is the first release. Pairing, discovery, streaming, input, resize, clipboard text, Dock tiles, reconnect, the login item, remote launch and quit, notarized releases and in-app updates all work. Not yet verified on a headless Mac. Not there yet: TLS on the signalling socket (Tailscale covers it today; see [security](docs/security.md)), audio, HEVC 4:4:4 and Intel builds. The [roadmap](docs/release-checklist.md) has the full list.
 
 ## License
 

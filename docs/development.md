@@ -55,7 +55,7 @@ npm run dist:notarized   # NOTARY_PROFILE=teleport scripts/release.sh
 
 `scripts/release.sh` makes a release build, signs it with the hardened runtime (`scripts/entitlements.plist`), and zips it into `dist/Teleport-<version>-arm64-mac.zip`. With notary credentials it is notarized and stapled, so Gatekeeper accepts it on another Mac. Without them the zip is built but not notarized. Only release bundles carry the Sparkle feed, so only they update themselves.
 
-Publishing a GitHub release does all of this in CI, plus the appcast and the Homebrew cask: see [releasing and updates](releasing.md). What's left before a first release is in the [release checklist](release-checklist.md).
+Publishing a GitHub release does all of this in CI, plus the appcast and the Homebrew cask: see [releasing and updates](releasing.md). What's still open is on the [roadmap](release-checklist.md).
 
 ## Video measurements
 
