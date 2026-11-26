@@ -1,84 +1,107 @@
+<div align="center">
+
+<img src="Resources/AppIcon.png" width="128" height="128" alt="Teleport app icon">
+
 # Teleport
 
-Use apps from another Mac as if they were here. Teleport streams individual app windows from a Mac in the office (the **host**, with or without a screen) to the Mac you work on (the **viewer**), over the LAN or Tailscale. Each remote window is a native window with a violet border and its own badged Dock icon, and takes your keyboard, mouse and dropped files. Think Parallels Coherence, but the apps run on another Mac.
+**Use the apps on another Mac as if they were right here.**
 
-One app, two modes. The first launch asks which one this Mac is.
+Teleport streams individual app windows from a Mac in the office (with or without a screen) to the Mac you work on. Each remote window becomes a native window with its own Dock icon, and takes your keyboard, mouse and dropped files. Think Parallels Coherence, but the apps run on another Mac.
 
-## How it works
+[![CI](https://github.com/estruyf/teleport/actions/workflows/ci.yml/badge.svg)](https://github.com/estruyf/teleport/actions/workflows/ci.yml)
+![macOS 14+](https://img.shields.io/badge/macOS-14%2B-6E56CF)
+![Swift 5.10](https://img.shields.io/badge/Swift-5.10-F05138?logo=swift&logoColor=white)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-| Piece | Implementation |
-|---|---|
-| Transport | [LiveKit](https://livekit.io) (open-source WebRTC SFU) running on the host; the Swift SDK on both sides |
-| Video | ScreenCaptureKit captures the owning app cropped to the window (so menus and popups show), H.264 at native Retina resolution |
-| Control | LiveKit RPC (`apps / open / close / resize / launch / icon`), a data channel for input, byte streams for dropped files |
-| Input | Viewer sends normalised events; host raises the window via Accessibility and posts `CGEvent`s |
-| Pairing | X25519 device keys. The host shows a one-time 6-digit code (2 minutes, 5 tries); the code is never sent, it salts the key the request is sealed with, so the request only opens on the host whose code you typed. The host shows a fingerprint and asks Allow. Paired viewers get one-hour LiveKit tokens from the host's control endpoint (LiveKit refreshes them while connected). The LiveKit secret never leaves the host. |
-| Headless | Host creates a virtual Retina display ("Teleport Stage") with the private `CGVirtualDisplay` API |
-| Dock | One `TeleportDockTile` stub per remote app, named after the app, with a badged icon |
-| Discovery | Bonjour `_teleport._tcp` on the LAN; Tailscale peers (via the Tailscale CLI) probed for a Teleport host |
-| Clipboard | Text, both ways, over the data channel (up to 14 KB) |
-| Resilience | The viewer reconnects for two minutes after a drop and reopens its windows; the host restarts `livekit-server` if it dies; a login item keeps the host up after a reboot |
+<img src="docs/images/portal.png" width="720" alt="A TextEdit window from the office Mac shown as a portal on the viewer, with a teal border and a Remote badge">
 
-Both Macs need macOS 14 or later. Built with SwiftPM; no Xcode needed.
+</div>
 
-## Setup
+## Why
+
+Some apps only run on one machine: the Mac with the company VPN, the licence, the build cache or the big GPU. Screen Sharing gives you that whole desktop in one window. Teleport gives you only the apps you need, as normal windows next to your own, on the Mac you're sitting at.
+
+## Features
+
+- **Window by window.** Open a single window of a remote app, not the whole desktop.
+- **Feels local.** Each portal is a native macOS window with its own badged Dock icon. Keyboard, mouse, scroll and resize go straight through.
+- **Headless friendly.** The host can create its own virtual Retina display, so a Mac mini without a monitor still renders sharp windows.
+- **Pair once, safely.** A one-time 6-digit code and a fingerprint check on both Macs. No accounts, no cloud relay, and the host decides which apps are reachable.
+- **Find Macs by name.** Hosts on the same network (Bonjour) or your Tailscale tailnet show up by name.
+- **Remote control of apps.** Launch apps, open new windows and quit apps on the host from the viewer's window or menu bar.
+- **Clipboard and files.** Text clipboard both ways; drop a file on a portal to send it to the host (experimental).
+- **Stays up.** The viewer reconnects after a network blip, the host restarts its streaming server if it dies, and a login item brings the host back after a reboot.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/host.png" alt="Host window: hosting status, a pairing code, paired Macs and the apps to teleport"></td>
+    <td width="50%"><img src="docs/images/viewer.png" alt="Viewer window: connected to the office Mac, with its shared apps and their windows"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Host</b>: pair a Mac and pick which apps to share</td>
+    <td align="center"><b>Viewer</b>: open, launch or quit apps on the host</td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="docs/images/welcome.png" width="50%" alt="First launch: choose whether this Mac is the host or the viewer"><br><b>First launch</b>: one app, two modes</td>
+  </tr>
+</table>
+
+## Quick start
+
+Both Macs need **macOS 14 or later**. There is no download yet, so build it from source (no Xcode needed, the Command Line Tools are enough):
 
 ```sh
-npm run deps        # brew install livekit (bundled into the app at build time)
-npm run bundle      # swift build + build/Teleport.app, signed with your Developer ID when present
+git clone https://github.com/estruyf/teleport.git && cd teleport
+npm run deps      # brew install livekit (bundled into the app)
+npm run bundle    # builds build/Teleport.app
 open build/Teleport.app
 ```
 
-For another Mac: `npm run dist` builds a release zip in `dist/`; with `NOTARY_PROFILE` set (see `scripts/release.sh`) it is notarized and stapled so Gatekeeper accepts it.
+Copy the app to the other Mac too (`npm run dist` makes a zip), then:
 
-**Host (the office Mac):** choose *This Mac shares its apps*. Grant **Screen Recording** and **Accessibility** when asked (the window shows a notice with a button to System Settings while either is missing). Nothing is shared until you add apps under *Shared apps* (search installed apps, or drop an .app on the sheet). The host lives in the menu bar; the window reopens from there. If this Mac locks itself after some idle minutes (its own settings or a company policy), switch on *Keep this Mac from locking itself*: while hosting, Teleport then counts as someone using it.
+1. **On the host** (the office Mac): choose *Share this Mac's apps*, grant **Screen Recording** and **Accessibility**, and add the apps you want to share.
+2. **On the viewer** (your Mac): choose *Use apps from another Mac* and press *Pair a new Mac*.
+3. **Pair**: press *Show pairing code* on the host, type it on the viewer, check that both Macs show the same fingerprint and press *Allow*.
+4. **Open a portal**: connect, then pick a window or launch an app.
 
-**Viewer (the Mac you work on):** choose *This Mac shows remote apps*. Press *Pair a new Mac*; hosts on the same network or tailnet are listed, or type the address (shown on the host, Tailscale address first). Enter the 6-digit code from *Show pairing code* on the host. The host asks to allow; both sides show the same fingerprint. After that, *Connect* and open or launch apps.
+The [getting started guide](docs/getting-started.md) covers each step, a headless host, keeping it reachable after a restart, and testing both modes on one Mac.
 
-### Loopback test on one Mac
+## How it works
 
-```sh
-npm run start:loopback-host   # a second instance as host, with its own identity in ~/.teleport-host
-open -n build/Teleport.app    # the viewer; pair with 127.0.0.1
+```mermaid
+flowchart LR
+  subgraph Host["Host Mac (office)"]
+    A[Shared app windows] -->|ScreenCaptureKit| E[H.264 encoder]
+    E --> L[livekit-server]
+    I[Input injector] -->|CGEvent + Accessibility| A
+  end
+  subgraph Viewer["Viewer Mac (yours)"]
+    P[Portal windows + Dock tiles]
+  end
+  L <-->|WebRTC over LAN or Tailscale| P
+  P -->|keyboard, mouse, files| I
 ```
 
-Granting Screen Recording makes macOS offer *Quit & Reopen*. That quits every instance of the bundle and relaunches one without `TELEPORT_HOME`, so start the loopback host again afterwards.
+The host runs a [LiveKit](https://livekit.io) server and streams each opened window as its own video track. The viewer shows every track in a native window and sends input back over a data channel. More in [how it works](docs/how-it-works.md).
 
-## Scripts
+## Documentation
 
-| Script | What it does |
+| Doc | What's in it |
 |---|---|
-| `npm run build` / `build:release` | `swift build` |
-| `npm run bundle` / `bundle:release` | build and wrap into `build/Teleport.app` (icon, Info.plist, ad-hoc signature) |
-| `npm run test` | run the TeleportCore tests (Swift Testing) |
-| `npm run dist` / `dist:notarized` | release zip in `dist/`, notarized with `NOTARY_PROFILE` |
-| `npm run icon` | regenerate `Resources/AppIcon.icns` from `scripts/make-icon.swift` |
-| `npm run start` | bundle and open the app |
-| `npm run start:loopback-host` | second instance as host, for testing on one Mac |
-| `npm run stop` | stop every Teleport process and livekit-server |
-| `npm run logs` / `logs:livekit` / `logs:stats` | follow the logs; `stats.log` needs `video.stats` |
-| `npm run test-pattern` | build and open the test-pattern window for measuring video ([docs/video-quality.md](docs/video-quality.md)) |
-| `npm run clean` | remove `.build` and `build` |
-
-## Ports
-
-`7880` signalling (WebSocket), `7881` RTC over TCP, `7882` RTC over UDP, `7883` control (pairing and tokens). Over Tailscale no port forwarding is needed.
-
-## Files
-
-All under `~/.teleport` (or `$TELEPORT_HOME`):
-
-- `config.json`: mode, name, port, shared apps, virtual display; on a host also its LiveKit key and secret (mode 600)
-- `device.key`: this Mac's private key (mode 600); `trust.json`: viewers the host allowed; `hosts.json`: hosts the viewer paired with
-- `app.log`, `livekit-server.log`, `livekit.pid`; `stats.log` when `video.stats` is on
-- `dock-tiles/`: generated Dock tile stubs and icons
-
-## Docs
-
-- [docs/release-checklist.md](docs/release-checklist.md): what is left for a first release
-- [docs/security.md](docs/security.md): the trust model, known gaps, and how Beam does linking
-- [docs/video-quality.md](docs/video-quality.md): measuring the video, the `video` settings, what is verified about them, and the A/B tests to run
+| [Getting started](docs/getting-started.md) | Installing, host and viewer setup, permissions, a headless host, testing on one Mac |
+| [How it works](docs/how-it-works.md) | Architecture, the pieces and the source layout |
+| [Configuration](docs/configuration.md) | `~/.teleport` files, `config.json`, ports and environment variables |
+| [Development](docs/development.md) | npm scripts, tests, CI, release builds and notarization |
+| [Security](docs/security.md) | The trust model, known gaps and how Beam does it |
+| [Video quality](docs/video-quality.md) | Measuring the video, the `video` settings and the A/B tests to run |
+| [Release checklist](docs/release-checklist.md) | What's left before a first release |
 
 ## Status
 
-Working: pairing, tokens, discovery by name, app and window listing, launch and new window, streaming, resize, mouse, keyboard, scroll, clipboard text, Dock tiles, remote border, file drop (experimental), reconnect, login item, menu bar item, bundled livekit-server, release script, tests and CI. Not yet verified on a headless Mac. Not yet: TLS on the signalling socket (on a plain LAN the session token travels over `ws://`; Tailscale covers it), audio, HEVC 4:4:4, Sparkle updates.
+Teleport is early. Pairing, discovery, streaming, input, resize, clipboard text, Dock tiles, reconnect, the login item, remote launch and quit, and notarized release builds all work. Not yet verified on a headless Mac. Not there yet: TLS on the signalling socket (Tailscale covers it today; see [security](docs/security.md)), audio, HEVC 4:4:4 and automatic updates. The [release checklist](docs/release-checklist.md) has the full list.
+
+## License
+
+[MIT](LICENSE) © Elio Struyf
