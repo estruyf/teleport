@@ -103,7 +103,7 @@ func render(size: CGFloat) -> NSImage {
         }
         NSGraphicsContext.restoreGraphicsState()
 
-        // Beam: three fading chevrons rising from the window
+        // Teleport: three fading chevrons rising from the window
         let chevronW = squircle.width * 0.16
         for (i, alpha) in [0.95, 0.60, 0.30].enumerated() {
             let y = winRect.maxY + squircle.height * (0.10 + CGFloat(i) * 0.085)

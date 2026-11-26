@@ -14,7 +14,7 @@ struct ViewerView: View {
 
     var body: some View {
         ZStack {
-            BeamBackdrop(strength: viewer.connected ? 1 : 0.6)
+            GlowBackdrop(strength: viewer.connected ? 1 : 0.6)
             if viewer.hosts.isEmpty {
                 welcome
             } else {

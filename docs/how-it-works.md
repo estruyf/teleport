@@ -78,4 +78,4 @@ Two undocumented macOS APIs are used: `CGVirtualDisplay` for the headless displa
 
 ## Prior art
 
-Teleport follows the shape of [Beam](https://beam.win) (code pairing, `trust.json`, discovery over Bonjour and Tailscale). [Security](security.md) compares the two. The video measurement ideas come from [voxl](https://github.com/tembo/voxl); its code is not used.
+The video measurement ideas come from [voxl](https://github.com/tembo/voxl); its code is not used.

@@ -9,7 +9,7 @@ What is still missing for a 0.1 that Elio can put on the office Mac and use ever
 - [ ] **Popups and menus.** Confirm dropdowns, context menus and autocomplete show up in portals (the app-wide capture cropped to the window is meant to carry them). The menu bar of a remote app is not in the window; decide whether to live with shortcuts or add a menu strip later.
 - [ ] **Keyboard edge cases.** Belgian/US layouts, dead keys, Fn and media keys, ⌘Tab and ⌘Space staying local, modifier state after focus changes.
 - [x] **Reconnect.** Viewer reconnects when the host restarts or the network blips; host restarts `livekit-server` if it dies; portals reopen or close cleanly.
-- [x] **Host starts at login and survives.** A LaunchAgent for the host Mac (RunAtLoad, KeepAlive), hosting on by default, so a reboot of the office Mac needs no SSH. A watchdog like Beam's is a bonus.
+- [x] **Host starts at login and survives.** A LaunchAgent for the host Mac (RunAtLoad, KeepAlive), hosting on by default, so a reboot of the office Mac needs no SSH. A watchdog is a bonus.
 - [x] **Bundle `livekit-server`.** Download a pinned release (with checksum) into `Contents/MacOS` in `scripts/bundle.sh`, so the office Mac needs no Homebrew. Keep the `livekitServerPath` override.
 - [x] **Release build, notarized.** `scripts/bundle.sh release`, `notarytool` with the Developer ID, stapled, zipped. Gatekeeper then accepts the copy on the office Mac without right-click tricks. Entitlements already cover the hardened runtime.
 - [x] **Plain-words errors.** Viewer: "not paired any more, pair again" on 401, "host unreachable, is Teleport running there?" on connection failures, token expired. Host: "livekit-server not found" with what to do; a note that Screen Recording needs Quit & Reopen.

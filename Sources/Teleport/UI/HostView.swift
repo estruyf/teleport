@@ -19,7 +19,7 @@ struct HostView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            BeamBackdrop(strength: host.state == .hosting ? 1 : 0.4)
+            GlowBackdrop(strength: host.state == .hosting ? 1 : 0.4)
             SidebarLayout {
                 sidebarStatus
                 SidebarHeading(text: "Host")

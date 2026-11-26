@@ -95,7 +95,7 @@ The host runs a [LiveKit](https://livekit.io) server and streams each opened win
 | [Configuration](docs/configuration.md) | `~/.teleport` files, `config.json`, ports and environment variables |
 | [Development](docs/development.md) | npm scripts, tests and CI |
 | [Releasing and updates](docs/releasing.md) | Cutting a release, the updater, the Homebrew cask and the signing keys |
-| [Security](docs/security.md) | The trust model, known gaps and how Beam does it |
+| [Security](docs/security.md) | The trust model and its known gaps |
 | [Video quality](docs/video-quality.md) | Measuring the video, the `video` settings and the A/B tests to run |
 | [Changelog](CHANGELOG.md) | What changed in each release |
 | [Release checklist](docs/release-checklist.md) | What's left before a first release |

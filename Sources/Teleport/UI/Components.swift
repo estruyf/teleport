@@ -69,7 +69,7 @@ struct PortalRing: View {
 }
 
 /// A soft violet glow at the top of a window, so every screen feels like the same place.
-struct BeamBackdrop: View {
+struct GlowBackdrop: View {
     var strength: Double = 1
 
     var body: some View {

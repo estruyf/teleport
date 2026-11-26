@@ -14,7 +14,7 @@ struct WelcomeView: View {
 
     var body: some View {
         ZStack {
-            BeamBackdrop(strength: 1.4)
+            GlowBackdrop(strength: 1.4)
             VStack(spacing: 26) {
                 ZStack {
                     PortalRing(mood: .live, size: 150)
