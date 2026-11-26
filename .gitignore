@@ -16,3 +16,6 @@ node_modules/
 
 # macOS
 .DS_Store
+
+# Launch video project and renders (/brag)
+brag-output*/

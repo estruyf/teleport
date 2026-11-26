@@ -14,7 +14,9 @@ Teleport streams individual app windows from a remote Mac (with or without a scr
 ![Swift 5.10](https://img.shields.io/badge/Swift-5.10-F05138?logo=swift&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-<img src="docs/images/portal.png" width="720" alt="A TextEdit window from the office Mac shown as a portal on the viewer, with a teal border and a Remote badge">
+<a href="docs/images/teleport.mp4"><img src="docs/images/teleport.gif" width="800" alt="Teleport in 22 seconds: one window lifts out of a remote desktop and opens as a native window, pairing with a 6-digit code, and opening a window from the viewer"></a>
+
+▶️ [Watch the video with sound (MP4)](docs/images/teleport.mp4) · <sub>Music: Sascha Ende, [ende.app](https://ende.app/en) (CC BY 4.0)</sub>
 
 </div>
 
