@@ -13,6 +13,7 @@ Teleport streams individual app windows from a remote Mac (with or without a scr
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-6E56CF)
 ![Swift 5.10](https://img.shields.io/badge/Swift-5.10-F05138?logo=swift&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Visitors](https://api.visitorbadge.io/api/visitors?path=https%3A%2F%2Fgithub.com%2Festruyf%2Fteleport&label=visitors&countColor=%236E56CF&style=flat)](https://visitorbadge.io/status?path=https%3A%2F%2Fgithub.com%2Festruyf%2Fteleport)
 
 <a href="docs/images/teleport.mp4"><img src="docs/images/teleport.gif" width="800" alt="Teleport in 22 seconds: one window lifts out of a remote desktop and opens as a native window, pairing with a 6-digit code, and opening a window from the viewer"></a>
 
