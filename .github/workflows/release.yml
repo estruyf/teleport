@@ -1,0 +1,180 @@
+name: Release
+
+# Publishing a GitHub release (tag vX.Y.Z) builds the app, signs and notarizes it, and attaches
+# the zip and a signed Sparkle appcast to the release. The app's updater reads
+# releases/latest/download/appcast.xml, so a published, non-prerelease release is what ships.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Attach the build to this existing release tag, e.g. v0.3.0 (leave empty to only keep the artifact)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build, sign, notarize and publish
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -switch /Applications/Xcode.app
+
+      # A release tag of v1.2.3 must match "version" in package.json: the bundle, the appcast
+      # and the updater's version comparison all read package.json.
+      - name: Check the version matches the tag
+        id: version
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          TAG="${{ github.event_name == 'release' && github.ref_name || inputs.tag }}"
+          echo "tag=$TAG package.json=$PKG"
+          if [ -n "$TAG" ] && [ "${TAG#v}" != "$PKG" ]; then
+            echo "::error::Tag $TAG does not match package.json version $PKG."
+            echo "Bump package.json on main (npm version ${TAG#v} --no-git-tag-version), push, then recreate the release."
+            exit 1
+          fi
+          echo "version=$PKG" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-release-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-release-${{ runner.os }}-
+
+      # bundle.sh copies livekit-server out of Homebrew into the app.
+      - name: Install livekit-server
+        run: brew install livekit
+
+      - name: Import the Developer ID certificate
+        env:
+          CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CERTIFICATE_P12:-}" ]; then
+            echo "::error::MACOS_CERTIFICATE is not set. A release must be signed with the Developer ID, or updates and TCC grants break."
+            exit 1
+          fi
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          # Random per-run password: this keychain is thrown away with the runner.
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+
+          echo -n "$CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT_PATH" -k "$KEYCHAIN" -P "" -T /usr/bin/codesign
+          # Lets codesign use the key without an interactive prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+
+          rm -f "$CERT_PATH"
+
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No Developer ID Application identity found in the imported certificate."
+            exit 1
+          fi
+          echo "Using identity: $IDENTITY"
+          echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize and staple
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          if [ -z "${NOTARY_APPLE_ID:-}" ]; then
+            echo "::error::APPLE_ID, APPLE_TEAM_ID and APPLE_APP_PASSWORD are needed to notarize."
+            exit 1
+          fi
+          scripts/release.sh
+
+      - name: Confirm the ticket is stapled
+        run: |
+          xcrun stapler validate build/Teleport.app
+          spctl --assess --type execute --verbose=2 build/Teleport.app
+
+      - name: Name the download
+        id: archive
+        run: |
+          NAME="Teleport-${{ steps.version.outputs.version }}-arm64-mac.zip"
+          test -f "dist/$NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "path=dist/$NAME" >> "$GITHUB_OUTPUT"
+
+      # Sparkle shows these in its update prompt: the release body, rendered by GitHub.
+      - name: Render the release notes
+        if: steps.version.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release view "$TAG" --json body -q .body > "$RUNNER_TEMP/notes.md"
+          if [ -s "$RUNNER_TEMP/notes.md" ]; then
+            gh api markdown -f mode=gfm -f context="$GITHUB_REPOSITORY" -F text=@"$RUNNER_TEMP/notes.md" > dist/notes.html
+          fi
+
+      - name: Write the signed appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          TAG: ${{ steps.version.outputs.tag || format('v{0}', steps.version.outputs.version) }}
+        run: |
+          if [ -z "${SPARKLE_PRIVATE_KEY:-}" ]; then
+            echo "::error::SPARKLE_PRIVATE_KEY is not set, so the update can't be signed and installed apps would refuse it."
+            exit 1
+          fi
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/${{ steps.archive.outputs.name }}"
+          NOTES=""; [ -f dist/notes.html ] && NOTES=dist/notes.html
+          scripts/appcast.sh "${{ steps.archive.outputs.path }}" "$URL" $NOTES > dist/appcast.xml
+          cat dist/appcast.xml
+
+      # GitHub wraps an artifact in a zip of its own, so its name must differ from the zip inside.
+      - name: Upload the build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: teleport-${{ steps.version.outputs.version }}-build
+          path: |
+            ${{ steps.archive.outputs.path }}
+            dist/appcast.xml
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Attach the app and appcast to the release
+        if: steps.version.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh release upload "$TAG" "${{ steps.archive.outputs.path }}" dist/appcast.xml --clobber
+
+      # Only a published, non-prerelease build belongs in the tap: the cask carries a single version.
+      - name: Update the Homebrew tap
+        if: github.event_name == 'release' && github.event.release.prerelease == false
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          ZIP: ${{ steps.archive.outputs.path }}
+        run: |
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set, so the tap still serves the previous version. Run homebrew/publish-cask.sh --push by hand."
+            exit 0
+          fi
+          ./homebrew/publish-cask.sh --push
+
+      - name: Clean up the keychain
+        if: always()
+        run: |
+          security list-keychain -d user -s login.keychain-db || true
+          rm -f "$RUNNER_TEMP/build.keychain-db" "$RUNNER_TEMP/certificate.p12"

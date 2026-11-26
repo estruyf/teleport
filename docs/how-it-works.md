@@ -45,6 +45,7 @@ flowchart LR
 | Discovery | Bonjour `_teleport._tcp` on the LAN; Tailscale peers (via the Tailscale CLI) probed for a Teleport host |
 | Clipboard | Text, both ways, over the data channel (up to 14 KB) |
 | Lock state | The host watches for screen lock and tells viewers, which show a warning |
+| Updates | Sparkle 2, from the EdDSA-signed appcast on the latest GitHub release. A host installs updates only while no viewer is connected; see [releasing and updates](releasing.md) |
 | Resilience | The viewer reconnects for two minutes after a drop and reopens its portals; the host restarts `livekit-server` if it dies; a login item brings the host back after a reboot |
 
 ## Source layout

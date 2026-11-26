@@ -19,7 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func showWindow() {
         if window == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 820, height: 620),
+                contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered, defer: false
             )
@@ -52,7 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Logout, restart and shutdown carry a quit reason; those mustn't wait on a dialog.
         let systemQuit = NSAppleEventManager.shared().currentAppleEvent?.attributeDescriptor(forKeyword: kAEQuitReason) != nil
         Task {
-            if model.host != nil, !systemQuit { await offerToRelock() }
+            // An update relaunches straight away; nobody may be at the Mac to answer.
+            if model.host != nil, !systemQuit, !model.updater.isInstalling { await offerToRelock() }
             // A disconnect that never returns must not keep the app alive; terminate() cleans up what's left.
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
                 NSApp.reply(toApplicationShouldTerminate: true)
@@ -84,6 +85,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             Log.info("Screen Sharing relocks this Mac again")
         }
     }
+
+    @objc func checkForUpdates(_: Any?) { model.updater.checkForUpdates() }
 
     func applicationWillTerminate(_: Notification) {
         model.terminate()
@@ -130,6 +133,9 @@ MainActor.assumeIsolated {
     mainMenu.addItem(appMenuItem)
     let appMenu = NSMenu()
     appMenu.addItem(withTitle: "About Teleport", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+    if delegate.model.updater.isAvailable {
+        appMenu.addItem(withTitle: "Check for Updates…", action: #selector(AppDelegate.checkForUpdates(_:)), keyEquivalent: "").target = delegate
+    }
     appMenu.addItem(.separator())
     appMenu.addItem(withTitle: "Hide Teleport", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
     appMenu.addItem(.separator())

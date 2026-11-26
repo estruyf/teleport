@@ -109,5 +109,7 @@ public struct TeleportConfig: Codable {
 }
 
 public enum TeleportVersion {
-    public static let string = "0.2.0"
+    /// From the bundle's Info.plist, which `scripts/bundle.sh` stamps from package.json.
+    /// `swift run` and the tests have no bundle version.
+    public static let string = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
 }

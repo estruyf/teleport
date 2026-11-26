@@ -31,16 +31,17 @@ Some apps only run on one machine: the Mac with the company VPN, the licence, th
 - **Remote control of apps.** Launch apps, open new windows and quit apps on the host from the viewer's window or menu bar.
 - **Clipboard and files.** Text clipboard both ways; drop a file on a portal to send it to the host (experimental).
 - **Stays up.** The viewer reconnects after a network blip, the host restarts its streaming server if it dies, and a login item brings the host back after a reboot.
+- **Updates itself.** Signed updates through Sparkle. A host installs them on its own while no viewer is connected.
 
 ## Screenshots
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/host.png" alt="Host window: hosting status, a pairing code, paired Macs and the apps to teleport"></td>
-    <td width="50%"><img src="docs/images/viewer.png" alt="Viewer window: connected to the office Mac, with its shared apps and their windows"></td>
+    <td width="50%"><img src="docs/images/host.png" alt="Host window: a sidebar with Overview, Apps, Paired Macs and Keep it running; the overview shows the status, a pairing code, the connected Mac and a readiness checklist"></td>
+    <td width="50%"><img src="docs/images/viewer.png" alt="Viewer window: paired Macs in the sidebar; the connected office Mac's shared apps, with the window open in a portal checked"></td>
   </tr>
   <tr>
-    <td align="center"><b>Host</b>: pair a Mac and pick which apps to share</td>
+    <td align="center"><b>Host</b>: everything that matters on one overview</td>
     <td align="center"><b>Viewer</b>: open, launch or quit apps on the host</td>
   </tr>
   <tr>
@@ -50,16 +51,15 @@ Some apps only run on one machine: the Mac with the company VPN, the licence, th
 
 ## Quick start
 
-Both Macs need **macOS 14 or later**. There is no download yet, so build it from source (no Xcode needed, the Command Line Tools are enough):
+Install Teleport on both Macs. They need **macOS 14 or later** on Apple Silicon.
 
 ```sh
-git clone https://github.com/estruyf/teleport.git && cd teleport
-npm run deps      # brew install livekit (bundled into the app)
-npm run bundle    # builds build/Teleport.app
-open build/Teleport.app
+brew install --cask estruyf/tap/teleport
 ```
 
-Copy the app to the other Mac too (`npm run dist` makes a zip), then:
+Or download `Teleport-<version>-arm64-mac.zip` from the [latest release](https://github.com/estruyf/teleport/releases/latest). It's signed and notarized, and keeps itself up to date. To build it yourself instead, see [getting started](docs/getting-started.md#build-from-source).
+
+Then:
 
 1. **On the host** (the office Mac): choose *Share this Mac's apps*, grant **Screen Recording** and **Accessibility**, and add the apps you want to share.
 2. **On the viewer** (your Mac): choose *Use apps from another Mac* and press *Pair a new Mac*.
@@ -93,14 +93,16 @@ The host runs a [LiveKit](https://livekit.io) server and streams each opened win
 | [Getting started](docs/getting-started.md) | Installing, host and viewer setup, permissions, a headless host, testing on one Mac |
 | [How it works](docs/how-it-works.md) | Architecture, the pieces and the source layout |
 | [Configuration](docs/configuration.md) | `~/.teleport` files, `config.json`, ports and environment variables |
-| [Development](docs/development.md) | npm scripts, tests, CI, release builds and notarization |
+| [Development](docs/development.md) | npm scripts, tests and CI |
+| [Releasing and updates](docs/releasing.md) | Cutting a release, the updater, the Homebrew cask and the signing keys |
 | [Security](docs/security.md) | The trust model, known gaps and how Beam does it |
 | [Video quality](docs/video-quality.md) | Measuring the video, the `video` settings and the A/B tests to run |
+| [Changelog](CHANGELOG.md) | What changed in each release |
 | [Release checklist](docs/release-checklist.md) | What's left before a first release |
 
 ## Status
 
-Teleport is early. Pairing, discovery, streaming, input, resize, clipboard text, Dock tiles, reconnect, the login item, remote launch and quit, and notarized release builds all work. Not yet verified on a headless Mac. Not there yet: TLS on the signalling socket (Tailscale covers it today; see [security](docs/security.md)), audio, HEVC 4:4:4 and automatic updates. The [release checklist](docs/release-checklist.md) has the full list.
+Teleport is early. Pairing, discovery, streaming, input, resize, clipboard text, Dock tiles, reconnect, the login item, remote launch and quit, notarized releases and in-app updates all work. Not yet verified on a headless Mac. Not there yet: TLS on the signalling socket (Tailscale covers it today; see [security](docs/security.md)), audio, HEVC 4:4:4 and Intel builds. The [release checklist](docs/release-checklist.md) has the full list.
 
 ## License
 

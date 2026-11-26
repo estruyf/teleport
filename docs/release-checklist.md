@@ -13,7 +13,7 @@ What is still missing for a 0.1 that Elio can put on the office Mac and use ever
 - [x] **Bundle `livekit-server`.** Download a pinned release (with checksum) into `Contents/MacOS` in `scripts/bundle.sh`, so the office Mac needs no Homebrew. Keep the `livekitServerPath` override.
 - [x] **Release build, notarized.** `scripts/bundle.sh release`, `notarytool` with the Developer ID, stapled, zipped. Gatekeeper then accepts the copy on the office Mac without right-click tricks. Entitlements already cover the hardened runtime.
 - [x] **Plain-words errors.** Viewer: "not paired any more, pair again" on 401, "host unreachable, is Teleport running there?" on connection failures, token expired. Host: "livekit-server not found" with what to do; a note that Screen Recording needs Quit & Reopen.
-- [ ] **Tag.** Add a LICENSE, tag `v0.1.0`, merge the office Mac's clone.
+- [x] **Tag.** LICENSE added, `v0.1.0` released through `release.yml`.
 
 ## Should
 
@@ -25,7 +25,8 @@ What is still missing for a 0.1 that Elio can put on the office Mac and use ever
 - [ ] **Dock tile polish.** Confirm the stub's icon and name show reliably, bouncing and badge, and that tiles vanish when the viewer quits.
 - [ ] **Paint-over, decided.** Keep `video.paintOver` off until the two-Mac runs show it sharpens without latency spikes when motion resumes; then make it the default or remove it with Teleport's encoder. Open questions are in [video-quality.md](video-quality.md).
 - [ ] **`npm run test` with Xcode installed.** It points `swift test` at the Command Line Tools' testing plugin, which fails when Xcode is the active toolchain; plain `swift test` (as CI runs it) works.
-- [ ] **Updates.** Sparkle with an appcast, as Beam does, once there is a place to host releases.
+- [x] **Updates.** Sparkle 2 with an appcast attached to each GitHub release; a host installs while no viewer is connected. See [releasing](releasing.md).
+- [ ] **Release secrets.** Add the six repository secrets listed in [releasing](releasing.md#one-time-setup), and back up the Sparkle key.
 
 ## Later
 

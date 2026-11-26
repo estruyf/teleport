@@ -11,6 +11,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/.build/$CONFIG"
 APP="$ROOT/build/Teleport.app"
 VERSION="$(python3 -c "import json;print(json.load(open('$ROOT/package.json'))['version'])")"
+# Sparkle: the feed is the appcast attached to the latest GitHub release (prereleases excluded), and
+# updates must be signed with the private half of this key (the SPARKLE_PRIVATE_KEY secret in CI;
+# `generate_keys --account teleport` in the login keychain). Debug bundles leave updates off.
+FEED_URL="https://github.com/estruyf/teleport/releases/latest/download/appcast.xml"
+SPARKLE_PUBLIC_KEY="ToXSTXiAdpnPhinAynDBjEDM7ovKbTKUTly2qNRmz+4="
 
 cd "$ROOT"
 # The build output is filtered down to errors and the final line, so say something first:
@@ -30,6 +35,9 @@ cp "$BIN/Teleport" "$BIN/TeleportDockTile" "$APP/Contents/MacOS/"
 # through Bundle.module (LiveKit's only holds its privacy manifest).
 for fw in "$BIN"/*.framework; do [ -d "$fw" ] && cp -R "$fw" "$APP/Contents/Frameworks/"; done
 for rb in "$BIN"/*.bundle; do [ -d "$rb" ] && cp -R "$rb" "$APP/Contents/Resources/"; done
+# Sparkle's XPC services are only for sandboxed apps; Teleport isn't, so they would be dead weight to sign.
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+rm -rf "$SPARKLE/Versions/B/XPCServices" "$SPARKLE/XPCServices"
 # livekit-server: LiveKit ships macOS builds only through Homebrew. Take the bottle for this
 # arch, and the other arch's bottle when brew can fetch it, so the bundle runs on both kinds of Mac.
 LIVEKIT_VERSION="1.13.11"
@@ -67,6 +75,13 @@ for exe in Teleport TeleportDockTile; do
   install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/$exe" 2>/dev/null || true
 done
 
+UPDATES=""
+if [ "$CONFIG" = "release" ]; then
+  UPDATES="<key>SUFeedURL</key><string>$FEED_URL</string>
+  <key>SUPublicEDKey</key><string>$SPARKLE_PUBLIC_KEY</string>
+  <key>SUEnableAutomaticChecks</key><true/>"
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -90,6 +105,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSAppTransportSecurity</key><dict>
     <key>NSAllowsArbitraryLoads</key><true/>
   </dict>
+  $UPDATES
 </dict></plist>
 PLIST
 
@@ -100,6 +116,13 @@ PLIST
 # would end the script here instead of falling through to the ad-hoc signature.
 IDENTITY="${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"' || true)}"
 if [ -n "$IDENTITY" ]; then
+  # Sparkle's helpers sit outside the places --deep looks, and notarization rejects unsigned or
+  # non-hardened code anywhere in the bundle, so sign them first, innermost out.
+  if [ -d "$SPARKLE" ]; then
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$SPARKLE/Versions/B/Autoupdate"
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$SPARKLE/Versions/B/Updater.app"
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$SPARKLE"
+  fi
   codesign --force --deep --options runtime --entitlements "$ROOT/scripts/entitlements.plist" --sign "$IDENTITY" "$APP"
   echo "signed as $IDENTITY"
 else

@@ -16,6 +16,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var viewer: ViewerController?
 
     let identity: DeviceIdentity
+    let updater = Updater()
     private var cancellables: Set<AnyCancellable> = []
 
     init() {
@@ -56,7 +57,10 @@ final class AppModel: ObservableObject {
             controller.$config.dropFirst().sink { [weak self] in self?.config = $0 }.store(in: &cancellables)
             controller.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
             host = controller
+            // A downloaded update installs only while no viewer is connected.
+            controller.$viewers.sink { [weak self] in self?.updater.hostIsIdle($0.isEmpty) }.store(in: &cancellables)
             NSApp.setActivationPolicy(.accessory)
+            updater.configure(for: .host)
             Task { await controller.start() }
         case .viewer:
             let controller = ViewerController(identity: identity, deviceName: config.deviceName)
@@ -66,6 +70,7 @@ final class AppModel: ObservableObject {
             controller.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
             viewer = controller
             NSApp.setActivationPolicy(.regular)
+            updater.configure(for: .viewer)
         }
     }
 
@@ -106,7 +111,7 @@ struct RootView: View {
                 }
             }
         }
-        .frame(minWidth: 760, minHeight: 560)
+        .frame(minWidth: 840, minHeight: 600)
         .overlay {
             if let message = app.stoppingMessage { StoppingOverlay(message: message) }
         }
@@ -174,6 +179,7 @@ struct SettingsSheet: View {
                         .disabled(!vdEnabled)
                     }
                 }
+                if app.updater.isAvailable { UpdatesSection(updater: app.updater, mode: app.config.mode) }
                 Section("This Mac's key") {
                     Text(app.identity.publicKeyHex).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                     Text("Files live in \(TeleportConfig.directory.path)").font(.caption).foregroundStyle(.secondary)
@@ -211,5 +217,30 @@ struct SettingsSheet: View {
         config.sounds = sounds
         app.config = config
         app.host?.config = config
+    }
+}
+
+private struct UpdatesSection: View {
+    @ObservedObject var updater: Updater
+    let mode: TeleportConfig.Mode?
+
+    var body: some View {
+        Section("Updates") {
+            Toggle("Check for updates automatically", isOn: Binding(get: { updater.automaticallyChecks }, set: { updater.automaticallyChecks = $0 }))
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Teleport \(TeleportVersion.string)")
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Check Now") { updater.checkForUpdates() }.disabled(!updater.canCheckForUpdates)
+            }
+        }
+    }
+
+    private var detail: String {
+        if let pending = updater.pendingVersion { return "\(pending) is downloaded and installs when no Mac is connected." }
+        let last = updater.lastCheck.map { "Last checked \($0.formatted(.relative(presentation: .named)))." } ?? "Not checked yet."
+        return mode == .host ? "\(last) A host installs updates by itself while no Mac is connected." : last
     }
 }

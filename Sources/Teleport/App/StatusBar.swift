@@ -137,6 +137,15 @@ final class StatusBar: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        if app.updater.isAvailable {
+            if let pending = app.updater.pendingVersion {
+                menu.addItem(disabled("Update \(pending) installs when no Mac is connected"))
+            }
+            let check = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+            check.target = self
+            check.isEnabled = app.updater.canCheckForUpdates
+            menu.addItem(check)
+        }
         menu.addItem(withTitle: "Quit Teleport", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 
@@ -204,6 +213,7 @@ final class StatusBar: NSObject, NSMenuDelegate {
     }
 
     @objc private func open() { openWindow() }
+    @objc private func checkForUpdates() { app.updater.checkForUpdates() }
     @objc private func startPairing() { app.host?.startPairing(); openWindow() }
     @objc private func cancelPairing() { app.host?.cancelPairing() }
     @objc private func startHost() { Task { await app.host?.start() } }

@@ -14,6 +14,7 @@ Everything is in `~/.teleport`, or in `$TELEPORT_HOME` when that is set.
 | `hosts.json` | Viewer: the hosts it paired with (name, address, port, public key). |
 | `app.log` | The app's log, rotated at 10 MB. `npm run logs` follows it. |
 | `livekit-server.log`, `livekit.yaml`, `livekit.pid` | Host: the streaming server's log, config and process id. |
+| `~/Library/Preferences/ai.teleport.app.plist` | Window position and the updater's state (Sparkle's `SU…` keys). |
 | `stats.log` | One line a second per portal when `video.stats` is on; see [video quality](video-quality.md#statslog). |
 | `dock-tiles/` | Viewer: generated Dock tile stubs and their icons. |
 
@@ -66,4 +67,5 @@ On a LAN these need to be reachable from the viewer. Over Tailscale no port forw
 | Variable | What it does |
 |---|---|
 | `TELEPORT_HOME` | Use another folder than `~/.teleport`, with its own identity and settings. Used for a [loopback test](getting-started.md#try-it-on-one-mac). |
-| `NOTARY_PROFILE` | For `scripts/release.sh`: the `notarytool` keychain profile to notarize with. See [development](development.md#release-builds). |
+| `TELEPORT_FEED_URL` | Point the updater at another appcast and check it right away, to try an update before releasing it. See [releasing](releasing.md#trying-an-update-before-it-ships). |
+| `NOTARY_PROFILE` | For `scripts/release.sh`: the `notarytool` keychain profile to notarize with. See [releasing](releasing.md#releasing-from-a-mac). |
