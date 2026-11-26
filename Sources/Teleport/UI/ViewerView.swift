@@ -1,21 +1,28 @@
 import SwiftUI
 import TeleportCore
 
-/// The viewer's window: paired hosts, then the connected host's apps.
+/// The viewer's window: your Macs in the sidebar, the selected one on the right:
+/// its apps while connected, otherwise what it takes to open a portal to it.
 struct ViewerView: View {
     @ObservedObject var app: AppModel
     @ObservedObject var viewer: ViewerController
     @StateObject private var browser = HostBrowser()
     @Local private var showPairSheet = false
     @Local private var pairPrefill: DiscoveredHost?
+    /// The selected paired host, by public key. Nil picks the connected one, else the first.
+    @Local private var selectedKey: String?
 
     var body: some View {
         ZStack {
             BeamBackdrop(strength: viewer.connected ? 1 : 0.6)
-            switch viewer.state {
-            case .connected: connectedView
-            case let .connecting(name): connectingView(name)
-            default: hostsView
+            if viewer.hosts.isEmpty {
+                welcome
+            } else {
+                SidebarLayout {
+                    sidebar
+                } detail: {
+                    detail
+                }
             }
         }
         .sheet(isPresented: $showPairSheet) {
@@ -23,75 +30,127 @@ struct ViewerView: View {
         }
         .onAppear { browser.start() }
         .onDisappear { browser.stop() }
+        // Follow the connection: connecting from the menu bar selects that Mac here too.
+        .onChange(of: viewer.current?.publicKey) { _, key in if let key { selectedKey = key } }
     }
 
-    // MARK: - Hosts
+    private var selected: PairedHost? {
+        if let selectedKey, let host = viewer.hosts.first(where: { $0.publicKey == selectedKey }) { return host }
+        return viewer.current ?? viewer.hosts.first
+    }
 
-    private var hostsView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 18) {
-                    PortalRing(mood: .idle, size: 64)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Your Macs").font(.title.weight(.semibold))
-                        Text(viewer.hosts.isEmpty ? "Pair the Mac whose apps you want here." : "Pick a Mac to teleport its apps here.")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button { pairPrefill = nil; showPairSheet = true } label: { Label("Pair a new Mac", systemImage: "plus") }.primaryAction()
-                }
-                .padding(.bottom, 4)
+    private func isNearby(_ host: PairedHost) -> Bool {
+        browser.hosts.contains { $0.keyPrefix == String(host.publicKey.prefix(16)) }
+    }
 
-                if case let .failed(message) = viewer.state {
-                    Notice(text: message, kind: .error)
-                } else if let notice = viewer.notice {
-                    Notice(text: notice, kind: notice.hasPrefix("Paired") ? .success : .info)
-                }
+    private var unpaired: [DiscoveredHost] {
+        browser.hosts.filter { found in !viewer.hosts.contains { $0.publicKey.hasPrefix(found.keyPrefix) } }
+    }
 
-                ForEach(viewer.hosts) { host in
-                    HostRow(host: host, online: browser.hosts.contains { $0.keyPrefix == String(host.publicKey.prefix(16)) }) {
-                        Task { await viewer.connect(host) }
-                    } forget: {
-                        viewer.forget(host)
-                    }
-                }
+    private func pair(_ prefill: DiscoveredHost?) {
+        pairPrefill = prefill
+        showPairSheet = true
+    }
 
-                let unpaired = browser.hosts.filter { found in !viewer.hosts.contains { $0.publicKey.hasPrefix(found.keyPrefix) } }
-                if !unpaired.isEmpty || browser.searching {
-                    Card(title: "Found nearby", subtitle: "Macs running Teleport on this network or your tailnet.") {
-                        ForEach(unpaired) { found in
-                            HStack(spacing: 12) {
-                                Image(systemName: "macmini").foregroundStyle(Theme.remote)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(found.name).font(.body.weight(.medium))
-                                    Text("\(found.address.isEmpty ? "resolving…" : found.address) · \(found.source.rawValue)").font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Button("Pair") { pairPrefill = found; showPairSheet = true }.controlSize(.small).disabled(found.address.isEmpty)
-                            }
-                        }
-                        if browser.searching, unpaired.isEmpty {
-                            HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Looking…").font(.caption).foregroundStyle(.secondary) }
-                        }
-                    }
-                }
+    // MARK: - Sidebar
 
-                if viewer.hosts.isEmpty, unpaired.isEmpty, !browser.searching {
-                    Card {
-                        EmptyState(icon: "macmini", title: "No Mac yet",
-                                   detail: "On the host Mac, open Teleport and press Show pairing code. Then pair it here.")
-                    }
-                }
+    @ViewBuilder private var sidebar: some View {
+        SidebarHeading(text: "Your Macs")
+        ForEach(viewer.hosts) { host in
+            SidebarRow(icon: "macmini.fill", title: host.name, subtitle: status(of: host),
+                       badge: viewer.current?.publicKey == host.publicKey && viewer.connected ? .live(viewer.openWindowIDs.count) : .none,
+                       selected: selected?.publicKey == host.publicKey) {
+                selectedKey = host.publicKey
             }
-            .padding(20)
+        }
+        if !unpaired.isEmpty {
+            SidebarHeading(text: "Nearby")
+            ForEach(unpaired) { found in
+                SidebarRow(icon: "macmini", title: found.name, subtitle: found.address.isEmpty ? "Resolving…" : "Not paired · \(found.source.rawValue)", selected: false) {
+                    pair(found)
+                }
+                .disabled(found.address.isEmpty)
+                .help("Pair with \(found.name)")
+            }
+        } else if browser.searching {
+            HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Looking nearby…").font(.caption).foregroundStyle(.secondary) }
+                .padding(.horizontal, 8).padding(.top, 8)
+        }
+        Spacer()
+        Button { pair(nil) } label: { Label("Pair a new Mac", systemImage: "plus").frame(maxWidth: .infinity) }
+            .controlSize(.large)
+    }
+
+    private func status(of host: PairedHost) -> String {
+        if viewer.current?.publicKey == host.publicKey {
+            switch viewer.state {
+            case .connected: return "Connected"
+            case .connecting: return "Connecting…"
+            default: break
+            }
+        }
+        return isNearby(host) ? "Nearby" : host.address
+    }
+
+    // MARK: - Detail
+
+    @ViewBuilder private var detail: some View {
+        if let host = selected {
+            let isCurrent = viewer.current?.publicKey == host.publicKey
+            switch viewer.state {
+            case .connected where isCurrent: connectedView(host)
+            case let .connecting(name) where name == host.name: connectingView(name)
+            default: hostCard(host)
+            }
         }
     }
 
-    // MARK: - Connecting
+    /// A paired Mac that isn't open: who it is, whether it's around, and the one button that matters.
+    private func hostCard(_ host: PairedHost) -> some View {
+        VStack(spacing: 18) {
+            Spacer(minLength: 0)
+            ZStack {
+                PortalRing(mood: .idle, size: 120)
+                Image(systemName: "macmini.fill").font(.system(size: 40)).foregroundStyle(Theme.remote)
+            }
+            VStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(host.name).font(.title.weight(.semibold))
+                    if isNearby(host) { StatusPill(text: "Nearby", color: Theme.ok) }
+                }
+                Text("\(host.address) · port \(String(host.port)) · paired \(host.pairedAt.formatted(date: .abbreviated, time: .omitted))")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            if case let .failed(message) = viewer.state, selectedFailed(host) {
+                Notice(text: message, kind: .error).frame(maxWidth: 460)
+            } else if let notice = viewer.notice {
+                Notice(text: notice, kind: notice.hasPrefix("Paired") ? .success : .info).frame(maxWidth: 460)
+            }
+            HStack(spacing: 10) {
+                Button { Task { await viewer.connect(host) } } label: {
+                    Label(viewer.connected ? "Switch to \(host.name)" : "Open portal", systemImage: "arrow.up.forward.app")
+                        .padding(.horizontal, 8)
+                }
+                .primaryAction().controlSize(.large).keyboardShortcut(.defaultAction)
+                Button("Forget", role: .destructive) { viewer.forget(host) }.controlSize(.large)
+            }
+            if viewer.connected, let current = viewer.current {
+                Text("Opening it closes the portals from \(current.name).").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The failure belongs to the selected Mac when no other one is the current connection.
+    private func selectedFailed(_ host: PairedHost) -> Bool {
+        viewer.current == nil || viewer.current?.publicKey == host.publicKey
+    }
 
     private func connectingView(_ name: String) -> some View {
         VStack(spacing: 18) {
-            PortalRing(mood: .busy, size: 150)
+            PortalRing(mood: .busy, size: 130)
             Text("Opening portal for \(name)…").font(.title2.weight(.semibold))
             Text(viewer.notice ?? "Connecting to \(name).").font(.callout).foregroundStyle(.secondary)
             Button("Cancel") { Task { await viewer.disconnect() } }.controlSize(.small)
@@ -99,78 +158,105 @@ struct ViewerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Connected
-
-    private var connectedView: some View {
+    private func connectedView(_ host: PairedHost) -> some View {
         VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                PortalRing(mood: .live, size: 36)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(viewer.current?.name ?? "").font(.headline)
-                    Text(viewer.current?.address ?? "").font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text("Apps on \(host.name)").font(.title2.weight(.semibold))
+                        StatusPill(text: "Connected", color: Theme.ok)
+                    }
+                    Text(connectedLine).font(.callout).foregroundStyle(.secondary)
                 }
-                StatusPill(text: "Connected", color: Theme.ok)
                 Spacer()
                 if viewer.busy { ProgressView().controlSize(.small) }
                 Button { Task { await viewer.refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh")
                 Button("Disconnect") { Task { await viewer.disconnect() } }
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if viewer.hostLocked {
-                        Notice(text: "\(viewer.current?.name ?? "The host") is locked. Its windows still show, but typing and opening new windows won't work until you unlock it, for example with Screen Sharing.", kind: .warning)
-                    }
-                    if let notice = viewer.notice { Notice(text: notice, kind: notice.hasPrefix("Could not") ? .error : .info) }
-                    if viewer.apps.isEmpty {
-                        EmptyState(icon: "square.grid.2x2", title: "Nothing shared yet",
-                                   detail: "On \(viewer.current?.name ?? "the host"), add apps under Apps to teleport. They appear here right away.")
-                    } else {
-                        Text("Apps on \(viewer.current?.name ?? "the host")").font(.title3.weight(.semibold))
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
-                            ForEach(viewer.apps) { remoteApp in
-                                RemoteAppCard(app: remoteApp, icon: viewer.icons[remoteApp.bundleID], busy: viewer.busy) { newWindow in
-                                    Task { await viewer.launch(remoteApp, newWindow: newWindow) }
-                                } open: { window in
-                                    Task { await viewer.open(window) }
-                                } quit: { force in
-                                    Task { await viewer.quit(remoteApp, force: force) }
-                                }
+            .padding(.top, 18)
+            .padding(.bottom, 12)
+            if viewer.hostLocked {
+                Notice(text: "\(host.name) is locked. Its windows still show, but typing and opening new windows won't work until you unlock it, for example with Screen Sharing.", kind: .warning)
+                    .padding(.horizontal, 20).padding(.bottom, 10)
+            }
+            if let notice = viewer.notice {
+                Notice(text: notice, kind: notice.hasPrefix("Could not") ? .error : .info)
+                    .padding(.horizontal, 20).padding(.bottom, 10)
+            }
+            if viewer.apps.isEmpty {
+                EmptyState(icon: "square.grid.2x2", title: "Nothing shared yet",
+                           detail: "On \(host.name), add apps under Apps. They appear here right away.")
+                    .frame(maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
+                        ForEach(viewer.apps) { remoteApp in
+                            RemoteAppCard(app: remoteApp, icon: viewer.icons[remoteApp.bundleID], busy: viewer.busy, openIDs: viewer.openWindowIDs) { newWindow in
+                                Task { await viewer.launch(remoteApp, newWindow: newWindow) }
+                            } open: { window in
+                                Task { await viewer.open(window) }
+                            } quit: { force in
+                                Task { await viewer.quit(remoteApp, force: force) }
                             }
                         }
                     }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
                 }
-                .padding(20)
             }
         }
     }
-}
 
-private struct HostRow: View {
-    let host: PairedHost
-    let online: Bool
-    let connect: () -> Void
-    let forget: () -> Void
+    private var connectedLine: String {
+        let running = viewer.apps.filter(\.running).count
+        let open = viewer.openWindowIDs.count
+        return "\(viewer.apps.count) shared, \(running) running · \(open) portal\(open == 1 ? "" : "s") open here · \(host(viewer.current))"
+    }
 
-    var body: some View {
-        Card {
-            HStack(spacing: 14) {
-                Image(systemName: "macmini.fill").font(.title2).foregroundStyle(Theme.remote)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 8) {
-                        Text(host.name).font(.headline)
-                        if online { StatusPill(text: "Nearby", color: Theme.ok) }
-                    }
-                    Text("\(host.address) · paired \(host.pairedAt.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Forget", role: .destructive, action: forget).controlSize(.small)
-                Button(action: connect) { Label("Open portal", systemImage: "arrow.up.forward.app") }.primaryAction()
+    private func host(_ host: PairedHost?) -> String { host?.address ?? "" }
+
+    // MARK: - First run
+
+    /// No Mac paired yet: one screen that says what to do, with the Macs already found nearby.
+    private var welcome: some View {
+        VStack(spacing: 20) {
+            Spacer(minLength: 0)
+            PortalRing(mood: browser.searching ? .busy : .idle, size: 110)
+            VStack(spacing: 6) {
+                Text("Pair the Mac whose apps you want here").font(.title2.weight(.semibold))
+                Text("On that Mac, open Teleport as the host and press Show pairing code.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
+            if !unpaired.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(unpaired) { found in
+                        HStack(spacing: 12) {
+                            Image(systemName: "macmini").foregroundStyle(Theme.remote)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(found.name).font(.body.weight(.medium))
+                                Text("\(found.address.isEmpty ? "resolving…" : found.address) · \(found.source.rawValue)").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Pair") { pair(found) }.controlSize(.small).disabled(found.address.isEmpty)
+                        }
+                        .padding(10)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+                .frame(maxWidth: 420)
+            } else if browser.searching {
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Looking for Macs nearby…").font(.caption).foregroundStyle(.secondary) }
+            }
+            if case let .failed(message) = viewer.state {
+                Notice(text: message, kind: .error).frame(maxWidth: 420)
+            }
+            Button { pair(nil) } label: { Label("Pair a new Mac", systemImage: "plus").padding(.horizontal, 8) }
+                .primaryAction().controlSize(.large)
+            Spacer(minLength: 0)
         }
-        .hoverOutline()
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -178,6 +264,7 @@ private struct RemoteAppCard: View {
     let app: AppInfo
     let icon: NSImage?
     let busy: Bool
+    var openIDs: Set<UInt32> = []
     let launch: (_ newWindow: Bool) -> Void
     let open: (WindowInfo) -> Void
     let quit: (_ force: Bool) -> Void
@@ -186,7 +273,7 @@ private struct RemoteAppCard: View {
     var body: some View {
         Card(fillHeight: true) {
             HStack(spacing: 12) {
-                AppIconView(image: icon, size: 48).shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+                AppIconView(image: icon, size: 40).shadow(color: .black.opacity(0.2), radius: 4, y: 2)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(app.name).font(.headline)
                     HStack(spacing: 6) {
@@ -196,8 +283,9 @@ private struct RemoteAppCard: View {
                     }
                 }
                 Spacer()
-                Button(app.running ? "New window" : "Launch") { launch(app.running) }
+                Button(app.running ? "New Window" : "Launch") { launch(app.running) }
                     .controlSize(.small)
+                    .fixedSize()
                     .disabled(busy)
                 if app.running {
                     Menu("Quit") {
@@ -225,7 +313,7 @@ private struct RemoteAppCard: View {
                     .padding(.vertical, 5)
                 } else {
                     ForEach(app.windows) { window in
-                        WindowRow(window: window) { open(window) }
+                        WindowRow(window: window, isOpen: openIDs.contains(window.id)) { open(window) }
                     }
                 }
             }
@@ -242,6 +330,7 @@ private struct RemoteAppCard: View {
 /// One remote window; the row itself is the button, highlighted under the pointer.
 private struct WindowRow: View {
     let window: WindowInfo
+    var isOpen = false
     let open: () -> Void
     @Local private var hovering = false
 
@@ -252,7 +341,7 @@ private struct WindowRow: View {
                 Text(window.title.isEmpty ? "Untitled" : window.title).lineLimit(1)
                 Spacer()
                 Text("\(Int(window.width))×\(Int(window.height))").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
-                Image(systemName: "arrow.up.forward.app").foregroundStyle(Theme.remote)
+                Image(systemName: isOpen ? "checkmark.circle.fill" : "arrow.up.forward.app").foregroundStyle(Theme.remote)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
@@ -261,7 +350,7 @@ private struct WindowRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("Open in a portal window")
+        .help(isOpen ? "Open in a portal here; click to bring it to the front" : "Open in a portal window")
     }
 }
 

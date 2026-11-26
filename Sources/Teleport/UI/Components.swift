@@ -215,16 +215,18 @@ struct Notice: View {
 /// Six digits, revealed one after another.
 struct CodeDisplay: View {
     let code: String
+    /// Smaller boxes, for a code shown in half a window.
+    var compact = false
     @Local private var shown = 0
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: compact ? 6 : 10) {
             ForEach(Array(code.enumerated()), id: \.offset) { index, digit in
-                if index == 3 { Spacer().frame(width: 8) }
+                if index == 3 { Spacer().frame(width: compact ? 6 : 8) }
                 Text(index < shown ? String(digit) : "•")
-                    .font(.system(size: 36, weight: .semibold, design: .rounded).monospacedDigit())
+                    .font(.system(size: compact ? 26 : 36, weight: .semibold, design: .rounded).monospacedDigit())
                     .foregroundStyle(index < shown ? Color.primary : Color.secondary)
-                    .frame(width: 48, height: 62)
+                    .frame(width: compact ? 34 : 48, height: compact ? 46 : 62)
                     .background(.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.remote.opacity(index < shown ? 0.7 : 0.25)))
                     .shadow(color: Theme.glow.opacity(index < shown ? 0.3 : 0), radius: 8)
@@ -468,5 +470,152 @@ struct Local<Value>: DynamicProperty {
 
     var projectedValue: Binding<Value> {
         Binding(get: { box.value }, set: { box.value = $0 })
+    }
+}
+
+// MARK: - Sidebar layout
+
+/// The window's two-pane layout: a sidebar of sections next to the selected one.
+struct SidebarLayout<Sidebar: View, Detail: View>: View {
+    @ViewBuilder var sidebar: Sidebar
+    @ViewBuilder var detail: Detail
+
+    var body: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) { sidebar }
+                .padding(12)
+                .frame(width: 214, alignment: .topLeading)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .background(.thinMaterial)
+                .overlay(alignment: .trailing) { Divider() }
+            detail.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+}
+
+/// What a sidebar row shows on its trailing edge, so a section's state is visible without opening it.
+enum SidebarBadge: Equatable {
+    case none
+    case count(Int)
+    case live(Int)
+    case attention
+}
+
+struct SidebarRow: View {
+    let icon: String
+    let title: String
+    var subtitle: String?
+    var badge: SidebarBadge = .none
+    let selected: Bool
+    let action: () -> Void
+    @Local private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: icon)
+                    .font(.system(size: 14))
+                    .foregroundStyle(selected ? Color.white : Theme.remote)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title).lineLimit(1)
+                    if let subtitle {
+                        Text(subtitle).font(.caption).foregroundStyle(selected ? Color.white.opacity(0.8) : .secondary).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 4)
+                badgeView
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, subtitle == nil ? 6 : 4)
+            .foregroundStyle(selected ? Color.white : Color.primary)
+            .background(background, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+
+    private var background: Color {
+        selected ? Theme.remote.opacity(0.85) : Color.primary.opacity(hovering ? 0.06 : 0)
+    }
+
+    @ViewBuilder private var badgeView: some View {
+        switch badge {
+        case .none: EmptyView()
+        case let .count(n):
+            Text("\(n)").font(.caption.monospacedDigit()).foregroundStyle(selected ? Color.white.opacity(0.85) : .secondary)
+        case let .live(n):
+            HStack(spacing: 4) {
+                Circle().fill(Theme.ok).frame(width: 7, height: 7)
+                Text("\(n)").font(.caption.monospacedDigit())
+            }
+            .foregroundStyle(selected ? Color.white.opacity(0.9) : .secondary)
+        case .attention:
+            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(selected ? Color.white : Theme.warn)
+        }
+    }
+}
+
+/// A small caption above a group of sidebar rows.
+struct SidebarHeading: View {
+    let text: String
+    var body: some View {
+        Text(text.uppercased()).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            .padding(.horizontal, 8).padding(.top, 10).padding(.bottom, 2)
+    }
+}
+
+/// A section's title row: what it is on the left, its main action on the right.
+struct SectionHeader<Trailing: View>: View {
+    let title: String
+    var subtitle: String?
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.title2.weight(.semibold))
+                if let subtitle { Text(subtitle).font(.callout).foregroundStyle(.secondary) }
+            }
+            Spacer()
+            trailing
+        }
+    }
+}
+
+extension SectionHeader where Trailing == EmptyView {
+    init(title: String, subtitle: String? = nil) {
+        self.init(title: title, subtitle: subtitle) { EmptyView() }
+    }
+}
+
+/// One line of a checklist: done, needs a look, or broken, with the fix one click away.
+struct CheckRow: View {
+    enum State { case ok, warn, bad, info }
+    let state: State
+    let title: String
+    var detail: String?
+    var action: (title: String, run: () -> Void)?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).foregroundStyle(color).frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+            }
+            Spacer(minLength: 8)
+            if let action { Button(action.title, action: action.run).controlSize(.small) }
+        }
+        .padding(.vertical, 3)
+    }
+
+    private var icon: String {
+        switch state { case .ok: "checkmark.circle.fill"; case .warn: "exclamationmark.triangle.fill"; case .bad: "xmark.octagon.fill"; case .info: "info.circle.fill" }
+    }
+
+    private var color: Color {
+        switch state { case .ok: Theme.ok; case .warn: Theme.warn; case .bad: Theme.bad; case .info: Theme.remote }
     }
 }

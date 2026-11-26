@@ -25,7 +25,9 @@ final class ViewerController: NSObject, ObservableObject {
     let deviceName: String
     private let room = Room()
     private var hostIdentity = Participant.Identity(from: HostController.identity)
-    private var portals: [UInt32: PortalWindowController] = [:]
+    private var portals: [UInt32: PortalWindowController] = [:] {
+        didSet { if Set(portals.keys) != openWindowIDs { openWindowIDs = Set(portals.keys) } }
+    }
     /// Tracks that arrived before their open() reply did.
     private var pendingTracks: [String: RemoteVideoTrack] = [:]
     /// Windows whose open() is on its way, so a double click doesn't make two portals.
@@ -48,7 +50,8 @@ final class ViewerController: NSObject, ObservableObject {
     var connected: Bool { if case .connected = state { true } else { false } }
 
     /// Host windows that have a portal open here.
-    var openWindowIDs: Set<UInt32> { Set(portals.keys) }
+    /// The remote windows open in a portal here, published so the window list can mark them.
+    @Published private(set) var openWindowIDs: Set<UInt32> = []
 
     init(identity: DeviceIdentity, deviceName: String) {
         self.identity = identity
