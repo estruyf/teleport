@@ -1,6 +1,6 @@
 {
   "name": "teleport",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Share individual app windows from a headless Mac to the Mac you work on, Coherence-style.",
   "scripts": {
