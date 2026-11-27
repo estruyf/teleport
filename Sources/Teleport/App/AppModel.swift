@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Combine
 import SwiftUI
 import TeleportCore
@@ -47,6 +48,9 @@ final class AppModel: ObservableObject {
     private func applyFlags() {
         Sounds.enabled = config.soundsEnabled
         viewer?.clipboardSyncEnabled = config.clipboardSyncEnabled
+        viewer?.notificationsEnabled = config.notificationsEnabled
+        viewer?.audioEnabled = config.audioEnabled
+        viewer?.microphoneEnabled = config.microphoneEnabled
     }
 
     private func activate(_ mode: TeleportConfig.Mode) {
@@ -65,6 +69,9 @@ final class AppModel: ObservableObject {
         case .viewer:
             let controller = ViewerController(identity: identity, deviceName: config.deviceName)
             controller.clipboardSyncEnabled = config.clipboardSyncEnabled
+            controller.notificationsEnabled = config.notificationsEnabled
+            controller.audioEnabled = config.audioEnabled
+            controller.microphoneEnabled = config.microphoneEnabled
             controller.videoTuning = config.videoTuning
             HostController.logVideoTuning(config.videoTuning)
             controller.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
@@ -150,6 +157,9 @@ struct SettingsSheet: View {
     @Local private var vdHeight = ""
     @Local private var clipboard = true
     @Local private var sounds = false
+    @Local private var notifications = true
+    @Local private var audio = true
+    @Local private var microphone = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -164,9 +174,16 @@ struct SettingsSheet: View {
                 }
                 Section("Between Macs") {
                     Toggle("Share clipboard text", isOn: $clipboard)
+                    Toggle(isOn: $notifications) {
+                        Text("Notifications from shared apps")
+                        Text(app.config.mode == .host
+                            ? "Sends the banners of the apps you share to the connected Mac. Other apps' notifications stay here."
+                            : "Shows the host's notifications from the apps it shares. Click one to open that app.")
+                    }
                     Toggle("Sounds when a portal opens or a Mac pairs", isOn: $sounds)
                     TextField("Port", text: $port)
                 }
+                if app.config.mode == .viewer { Section("Sound") { soundSettings } }
                 if app.config.mode == .host {
                     Section("Virtual display") {
                         Toggle("Create a display for a Mac without a screen", isOn: $vdEnabled)
@@ -203,6 +220,21 @@ struct SettingsSheet: View {
             vdHeight = String(app.config.virtualDisplay.height)
             clipboard = app.config.clipboardSyncEnabled
             sounds = app.config.soundsEnabled
+            notifications = app.config.notificationsEnabled
+            audio = app.config.audioEnabled
+            microphone = app.config.microphoneEnabled
+        }
+    }
+
+    /// The viewer's sound settings; a host has a Sound section in its window.
+    @ViewBuilder private var soundSettings: some View {
+        Toggle(isOn: $audio) {
+            Text("Play the shared apps' sound")
+            Text("Teams ringing, a video, the other side of a call.")
+        }
+        Toggle(isOn: $microphone) {
+            Text("Send this Mac's microphone to shared apps")
+            Text("Only while a shared app on the host listens to a microphone, such as during a call. The host needs a virtual audio device; the Sound section in its window shows how to set one up.")
         }
     }
 
@@ -215,6 +247,16 @@ struct SettingsSheet: View {
         if let h = Int(vdHeight), h >= 600 { config.virtualDisplay.height = h }
         config.clipboardSync = clipboard
         config.sounds = sounds
+        config.notifications = notifications
+        // A host's sound settings live in the Sound section of its window and change there.
+        if app.config.mode == .viewer {
+            config.audio = audio
+            // Ask now, while Teleport is in front: the microphone is first used when a call starts, maybe in the background.
+            if microphone, !app.config.microphoneEnabled, AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+                AVCaptureDevice.requestAccess(for: .audio) { _ in }
+            }
+            config.microphone = microphone
+        }
         app.config = config
         app.host?.config = config
     }

@@ -6,5 +6,7 @@
        LiveKit, not us, and the dock tile stubs are copied binaries. -->
   <key>com.apple.security.cs.disable-library-validation</key><true/>
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <!-- The viewer's microphone, for calls in a shared app. -->
+  <key>com.apple.security.device.audio-input</key><true/>
 </dict>
 </plist>

@@ -104,6 +104,11 @@ Log.setup(role: "app")
 if let config = try? TeleportConfig.load(), config.mode == .host, config.videoTuning.encoder == .teleport {
     TeleportEncoderFactory.install(config.videoTuning)
 }
+// A host's audio engine touches no device: the shared apps' sound is captured and sent, and nothing
+// plays out of its speakers or needs its microphone. It has to be set before the engine exists.
+if (try? TeleportConfig.load())?.mode == .host {
+    HostController.useNoAudioDevice()
+}
 
 // Ctrl-C / kill should take livekit-server down with us; AppKit doesn't handle signals itself.
 nonisolated(unsafe) var signalSources: [DispatchSourceSignal] = []

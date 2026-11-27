@@ -30,12 +30,25 @@ public struct TeleportConfig: Codable {
     public var sounds: Bool?
     /// Host: count as in use while hosting, so an idle-lock policy doesn't lock it. Nil means off.
     public var keepAlive: Bool?
+    /// Host: send notifications from shared apps to viewers. Viewer: show them. Nil means on.
+    public var notifications: Bool? = nil
+    /// Host: send the shared apps' sound to viewers. Viewer: play it. Nil means on.
+    public var audio: Bool? = nil
+    /// Viewer: send this Mac's microphone while a shared app on the host listens to one. Nil means off.
+    public var microphone: Bool? = nil
+    /// Host: the UID of the virtual audio device the viewer's microphone plays into, which the
+    /// shared apps then use as their microphone. Nil picks a BlackHole device when there is one;
+    /// "" turns it off.
+    public var microphoneDevice: String? = nil
     /// Video tuning for A/B tests, edited by hand; see `docs/video-quality.md`. Nil means today's behaviour.
     public var video: VideoConfig? = nil
 
     public var clipboardSyncEnabled: Bool { clipboardSync ?? true }
     public var soundsEnabled: Bool { sounds ?? false }
     public var keepAliveEnabled: Bool { keepAlive ?? false }
+    public var notificationsEnabled: Bool { notifications ?? true }
+    public var audioEnabled: Bool { audio ?? true }
+    public var microphoneEnabled: Bool { microphone ?? false }
     public var videoTuning: VideoTuning { VideoTuning(video ?? VideoConfig()) }
 
     public struct VirtualDisplayConfig: Codable {

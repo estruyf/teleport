@@ -37,6 +37,7 @@ final class ViewerController: NSObject, ObservableObject {
     private let inputQueue: AsyncStream<Data>.Continuation
     private var inputTask: Task<Void, Never>?
     private let dockTiles = DockTileManager()
+    private let notifications = NotificationPresenter()
     private let hostStore = JSONListStore<PairedHost>(filename: "hosts.json")
     private let clipboard = ClipboardSync()
     private var userDisconnecting = false
@@ -44,6 +45,23 @@ final class ViewerController: NSObject, ObservableObject {
     /// Windows that were open when the connection dropped; reopened after a reconnect.
     private var reopenAfterReconnect: [WindowInfo] = []
     var clipboardSyncEnabled = true
+    /// Show the host's notifications from shared apps here.
+    var notificationsEnabled = true
+    /// Play the shared apps' sound here.
+    var audioEnabled = true {
+        didSet { applyAudioVolume() }
+    }
+    /// Send this Mac's microphone while a shared app on the host listens to one.
+    var microphoneEnabled = false {
+        didSet { updateMicrophone() }
+    }
+    /// This Mac's microphone is going to the host right now.
+    @Published private(set) var microphoneLive = false
+    /// The host asks for the microphone: one of its shared apps listens to one.
+    private var hostWantsMicrophone = false
+    private var hostAudio: RemoteAudioTrack?
+    private var microphonePublication: LocalTrackPublication?
+    private var microphoneQueue: Task<Void, Never>?
     /// The `video` settings that apply to a viewer: stats and the measurement probe.
     var videoTuning = VideoTuning(VideoConfig())
 
@@ -69,6 +87,9 @@ final class ViewerController: NSObject, ObservableObject {
         clipboard.onChange = { [weak self] text in self?.sendClipboard(text) }
         dockTiles.onActivate = { [weak self] bundleID in
             self?.focusApp(bundleID)
+        }
+        notifications.onOpen = { [weak self] id, bundleID in
+            self?.openNotification(id: id, bundleID: bundleID)
         }
     }
 
@@ -149,6 +170,7 @@ final class ViewerController: NSObject, ObservableObject {
         current = nil
         apps = []
         hostLocked = false
+        resetSound()
         state = .idle
     }
 
@@ -163,6 +185,7 @@ final class ViewerController: NSObject, ObservableObject {
         clipboard.stop()
         apps = []
         hostLocked = false
+        resetSound()
         state = .connecting(host.name)
         notice = "Connection to \(host.name) lost. Reconnecting…"
         Log.warn("disconnected from \(host.name): \(String(describing: error)); reconnecting")
@@ -335,6 +358,86 @@ final class ViewerController: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Sound
+
+    private func hostAudioArrived(_ track: RemoteAudioTrack) {
+        hostAudio = track
+        applyAudioVolume()
+        Log.info("sound: receiving the host's app audio\(audioEnabled ? "" : " (muted in settings)")")
+    }
+
+    private func applyAudioVolume() {
+        hostAudio?.volume = audioEnabled ? 1 : 0
+    }
+
+    private func hostStatusChanged(_ status: HostStatus) {
+        hostLocked = status.locked
+        let wanted = status.microphoneWanted ?? false
+        guard wanted != hostWantsMicrophone else { return }
+        hostWantsMicrophone = wanted
+        updateMicrophone()
+    }
+
+    /// Sends the microphone while the setting is on and a shared app on the host listens to one;
+    /// otherwise unpublishes it, which lets go of the microphone (and its indicator) here.
+    private func updateMicrophone() {
+        let wanted = connected && microphoneEnabled && hostWantsMicrophone
+        let previous = microphoneQueue
+        microphoneQueue = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            let live = self.microphonePublication != nil
+            guard wanted != live else { return }
+            do {
+                if wanted {
+                    self.microphonePublication = try await self.room.localParticipant.setMicrophone(
+                        enabled: true, publishOptions: AudioPublishOptions(name: TrackName.microphone)
+                    )
+                    Log.info("sound: microphone on; an app on the host is listening")
+                } else if let publication = self.microphonePublication {
+                    self.microphonePublication = nil
+                    try await self.room.localParticipant.unpublish(publication: publication)
+                    Log.info("sound: microphone off")
+                }
+            } catch {
+                Log.warn("sound: microphone \(wanted ? "on" : "off") failed: \(error)")
+                if wanted { self.notice = "Could not use the microphone: \(error). Check System Settings › Privacy & Security › Microphone." }
+            }
+            self.microphoneLive = self.microphonePublication != nil
+        }
+    }
+
+    /// The room is gone, and its tracks with it.
+    private func resetSound() {
+        hostAudio = nil
+        hostWantsMicrophone = false
+        microphonePublication = nil
+        microphoneLive = false
+    }
+
+    // MARK: - Notifications
+
+    private func showNotification(_ notification: RemoteNotification) async {
+        guard notificationsEnabled else { return }
+        let icon = await loadIcon(for: notification.bundleID)
+        await notifications.show(notification, icon: icon)
+    }
+
+    /// A notification was clicked: click it on the host too, so the app goes to what it is about,
+    /// then bring that app's portal forward, or open one.
+    func openNotification(id: String, bundleID: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        guard connected else { return }
+        Task {
+            // A host before notifications doesn't know this call; the app still comes forward below.
+            if let payload = try? ShowNotificationRequest(id: id, bundleID: bundleID).jsonString() {
+                _ = try? await rpc(RPCMethod.showNotification, payload, timeout: 10)
+            }
+            await refresh()
+            focusApp(bundleID)
+        }
+    }
+
     func portalClosed(_ windowID: UInt32) {
         guard let portal = portals.removeValue(forKey: windowID) else { return }
         fireAndForget(RPCMethod.close, CloseRequest(windowID: windowID))
@@ -435,6 +538,10 @@ final class ViewerController: NSObject, ObservableObject {
 
 extension ViewerController: RoomDelegate {
     nonisolated func room(_: Room, participant _: RemoteParticipant, didSubscribeTrack publication: RemoteTrackPublication) {
+        if let audio = publication.track as? RemoteAudioTrack {
+            Task { @MainActor in self.hostAudioArrived(audio) }
+            return
+        }
         guard let track = publication.track as? RemoteVideoTrack else { return }
         let name = publication.name
         Task { @MainActor in self.trackArrived(track, name: name) }
@@ -453,10 +560,15 @@ extension ViewerController: RoomDelegate {
                 guard self.clipboardSyncEnabled, let message = try? JSONDecoder().decode(ClipboardMessage.self, from: data) else { return }
                 self.clipboard.apply(message.text)
             }
+        case Topic.notifications:
+            Task { @MainActor in
+                guard let notification = try? JSONDecoder().decode(RemoteNotification.self, from: data) else { return }
+                await self.showNotification(notification)
+            }
         case Topic.hostStatus:
             Task { @MainActor in
                 guard let status = try? JSONDecoder().decode(HostStatus.self, from: data) else { return }
-                self.hostLocked = status.locked
+                self.hostStatusChanged(status)
             }
         default: break
         }

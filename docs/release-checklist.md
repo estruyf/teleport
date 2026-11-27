@@ -21,6 +21,8 @@ What's done and what's still open for Teleport to be something to put on a remot
 - [x] **Tests and CI.** Unit tests for `PairingCrypto` (seal/open, wrong code fails, fingerprint stable), `AccessToken`, the control endpoint's refusals; a GitHub Actions macOS job running `swift build` and `swift test`.
 - [x] **Log rotation** at 10 MB, and a `teleport report` style zip for bug reports.
 - [x] **Clipboard sync**, both directions, text first.
+- [ ] **Sound, verified with a Teams call.** App audio was verified end to end with a test app in a loopback test. Still to check on two Macs: Teams' sound (its audio may come from helper processes), the microphone into BlackHole during a real call, echo, and drift over a long call.
+- [ ] **Notifications, verified with Teams.** Forwarding and click-through work with Script Editor on macOS 27 in a loopback test. Check them with Teams on a real host, including while Teams is frontmost there.
 - [ ] **Security hardening** from [security.md](security.md): at least the TLS proxy before using a plain LAN you don't control.
 - [ ] **Dock tile polish.** Confirm the stub's icon and name show reliably, bouncing and badge, and that tiles vanish when the viewer quits.
 - [ ] **Paint-over, decided.** Keep `video.paintOver` off until the two-Mac runs show it sharpens without latency spikes when motion resumes; then make it the default or remove it with Teleport's encoder. Open questions are in [video-quality.md](video-quality.md).
@@ -30,4 +32,4 @@ What's done and what's still open for Teleport to be something to put on a remot
 
 ## Later
 
-- Audio of the remote app, HEVC 4:4:4 "text clarity", file drag from host to viewer, multiple viewers, a browser guest viewer, a `teleport` CLI (`doctor`, `pair`, `serve`) for SSH use.
+- Stereo app sound, HEVC 4:4:4 "text clarity", file drag from host to viewer, multiple viewers, a browser guest viewer, a `teleport` CLI (`doctor`, `pair`, `serve`) for SSH use.

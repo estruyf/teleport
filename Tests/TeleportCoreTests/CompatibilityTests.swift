@@ -38,6 +38,25 @@ import Testing
         #expect(decoded.keepAliveEnabled == false)
     }
 
+    @Test func configWithoutNotificationsLeavesThemOn() throws {
+        let decoded = try JSONDecoder().decode(TeleportConfig.self, from: JSONEncoder().encode(config))
+        #expect(decoded.notifications == nil)
+        #expect(decoded.notificationsEnabled)
+    }
+
+    @Test func hostStatusFromAnOlderHostWantsNoMicrophone() throws {
+        let status = try HostStatus.fromJSON(#"{"locked":false}"#)
+        #expect(status.microphoneWanted == nil)
+        #expect(try HostStatus.fromJSON(HostStatus(locked: true, microphoneWanted: true).jsonString()).microphoneWanted == true)
+    }
+
+    @Test func configWithoutSoundKeysPlaysSoundButKeepsTheMicrophoneOff() throws {
+        let decoded = try JSONDecoder().decode(TeleportConfig.self, from: JSONEncoder().encode(config))
+        #expect(decoded.audioEnabled)
+        #expect(!decoded.microphoneEnabled)
+        #expect(decoded.microphoneDevice == nil)
+    }
+
     @Test func adminTokenOnlyAdministersTheRoom() throws {
         let token = AccessToken.admin(config: config)
         let parts = token.split(separator: ".")

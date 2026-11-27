@@ -98,6 +98,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSScreenCaptureUsageDescription</key><string>Teleport streams your windows to your other Mac.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Teleport sends your microphone to an app on your other Mac while it listens to one, such as during a call.</string>
   <key>NSLocalNetworkUsageDescription</key><string>Teleport connects to your other Macs on this network.</string>
   <key>NSBonjourServices</key><array><string>_teleport._tcp</string></array>
   <!-- Arbitrary loads alone: with NSAllowsLocalNetworking beside it, macOS ignores

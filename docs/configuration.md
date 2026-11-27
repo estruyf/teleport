@@ -32,6 +32,10 @@ Everything is in `~/.teleport`, or in `$TELEPORT_HOME` when that is set.
 | `livekitServerPath` | unset | An explicit path to `livekit-server`, instead of the bundled one or Homebrew's. |
 | `clipboardSync` | on | Share clipboard text with the other Mac. |
 | `sounds` | off | A short sound when a portal opens or a Mac pairs. |
+| `audio` | on | Host: send the shared apps' sound (the *Sound* section). Viewer: play it (*Settings › Sound*). See [sound and microphone](getting-started.md#sound-and-microphone). |
+| `microphone` | off | Viewer: send this Mac's microphone while a shared app on the host listens to one. |
+| `microphoneDevice` | unset | Host: UID of the virtual audio device the viewer's microphone plays into. Unset picks a BlackHole device; `""` turns it off. |
+| `notifications` | on | Host: send banners from shared apps to the viewer. Viewer: show them. See [notifications](getting-started.md#notifications). |
 | `keepAlive` | off | Host: count as in use while hosting, so an idle-lock policy doesn't lock it. Same as the toggle in the app. |
 | `video` | unset | Video tuning for A/B tests. Every key is documented in [video quality](video-quality.md#settings). |
 | `apiKey`, `apiSecret`, `room` | generated | The host's own LiveKit credentials. Viewers never see the secret. |

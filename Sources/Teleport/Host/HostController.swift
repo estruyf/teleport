@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import CoreAudio
 import CryptoKit
 import LiveKit
 import TeleportCore
@@ -40,7 +41,11 @@ final class HostController: NSObject, ObservableObject {
     /// livekit-server could not be found when starting.
     @Published private(set) var livekitMissing = false
     @Published var config: TeleportConfig {
-        didSet { try? config.save() }
+        didSet {
+            try? config.save()
+            updateNotificationWatch()
+            updateSound()
+        }
     }
 
     let identity: DeviceIdentity
@@ -52,12 +57,26 @@ final class HostController: NSObject, ObservableObject {
     private let bonjour = BonjourAdvertiser()
     private let clipboard = ClipboardSync()
     private let keepAlive = KeepAlive()
+    /// The shared apps' sound, sent while a viewer is connected.
+    private let appAudio = AppAudioCapture()
+    private var appAudioPublished = false
+    /// Plays the viewer's microphone into a virtual audio device; nil while there is none.
+    /// LiveKit holds audio renderers weakly, so this reference is what keeps it alive.
+    private var virtualMicrophone: VirtualMicrophone?
+    private var viewerMicrophone: RemoteAudioTrack?
+    private var microphoneTimer: Timer?
+    /// The shared app listening to a microphone now; the viewer sends its microphone while there is one.
+    @Published private(set) var microphoneListener: String?
+    /// Virtual audio devices the viewer's microphone can play into; follows installs and removals.
+    @Published private(set) var virtualDevices: [VirtualAudioDevice] = []
+    private var soundQueue: Task<Void, Never>?
+    private lazy var notificationWatcher = NotificationWatcher { [weak self] banner in self?.forward(banner) }
     private var portals: [CGWindowID: Portal] = [:]
     private var openingPortals: [CGWindowID: Task<Portal, Error>] = [:]
     private var activity: NSObjectProtocol?
     private var lockObservers: [NSObjectProtocol] = []
-    /// Last lock state sent to viewers.
-    private var sentLocked: Bool?
+    /// Last status sent to viewers.
+    private var sentStatus: HostStatus?
     private let trustStore = JSONListStore<TrustedDevice>(filename: "trust.json")
     private var approvalContinuation: CheckedContinuation<Bool, Never>?
     /// The room keeps RPC and byte-stream handlers across disconnects, and registering twice throws.
@@ -77,6 +96,8 @@ final class HostController: NSObject, ObservableObject {
         super.init()
         trusted = trustStore.load()
         room.add(delegate: self)
+        virtualDevices = VirtualAudioDevice.all()
+        watchAudioDevices()
     }
 
     // MARK: - Lifecycle
@@ -127,6 +148,7 @@ final class HostController: NSObject, ObservableObject {
             try control.start(port: config.controlPort)
             self.control = control
 
+            Self.useNoAudioDevice()
             try await room.connect(
                 url: server.signalURL,
                 token: AccessToken.make(config: config, identity: Self.identity)
@@ -143,6 +165,8 @@ final class HostController: NSObject, ObservableObject {
             clipboard.onChange = { [weak self] text in self?.broadcastClipboard(text) }
             if config.keepAliveEnabled { keepAlive.start() }
             state = .hosting
+            updateNotificationWatch()
+            updateSound()
             Log.info("hosting on port \(config.port); allowed apps: \(config.allowedApps.joined(separator: ", "))")
             Self.logVideoTuning(config.videoTuning)
             // Switched to host mode without a relaunch: main.swift didn't install it.
@@ -172,6 +196,8 @@ final class HostController: NSObject, ObservableObject {
     private func tearDown() async {
         cancelPairing()
         keepAlive.stop()
+        notificationWatcher.stop()
+        stopSound()
         for id in Array(portals.keys) { await close(id) }
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
         activity = nil
@@ -186,7 +212,7 @@ final class HostController: NSObject, ObservableObject {
         self.server = nil
         await server?.stopInBackground()
         viewers = []
-        sentLocked = nil
+        sentStatus = nil
     }
 
     /// Synchronous shutdown for signal handlers and app termination.
@@ -229,6 +255,207 @@ final class HostController: NSObject, ObservableObject {
         clipboard.apply(message.text)
     }
 
+    // MARK: - Notifications
+
+    /// Watch for banners only while there is someone to send them to.
+    private func updateNotificationWatch() {
+        if state == .hosting, config.notificationsEnabled, !room.remoteParticipants.isEmpty {
+            notificationWatcher.start()
+        } else {
+            notificationWatcher.stop()
+        }
+    }
+
+    /// Sends a banner on to the viewers, if it comes from a shared app. Others never leave this Mac.
+    private func forward(_ banner: NotificationWatcher.Banner) {
+        guard config.notificationsEnabled, !room.remoteParticipants.isEmpty,
+              let bundleID = config.allowedApps.first(where: { BannerText.matches(banner.app, any: Self.names(of: $0)) })
+        else { return }
+        let message = RemoteNotification(id: banner.id, bundleID: bundleID, app: banner.app, title: banner.title,
+                                         subtitle: banner.subtitle, body: banner.body).trimmed()
+        guard let data = try? JSONEncoder().encode(message) else { return }
+        Log.info("notifications: forwarded \(banner.id) from \(bundleID)")
+        Task { try? await room.localParticipant.publish(data: data, options: DataPublishOptions(topic: Topic.notifications, reliable: true)) }
+    }
+
+    /// The names an app goes by in Notification Center: its running name, its bundle's names and its file name.
+    private static func names(of bundleID: String) -> [String] {
+        var names = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).compactMap(\.localizedName)
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            names.append(FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: ""))
+            let info = Bundle(url: url)?.localizedInfoDictionary ?? [:]
+            let base = Bundle(url: url)?.infoDictionary ?? [:]
+            for key in ["CFBundleDisplayName", "CFBundleName"] {
+                if let name = info[key] as? String ?? base[key] as? String { names.append(name) }
+            }
+        }
+        return names
+    }
+
+    /// A viewer clicked a notification: click the banner here, so the app opens where it points.
+    /// When the banner is gone, bring the app forward instead; the viewer then opens its window.
+    private func showNotification(_ request: ShowNotificationRequest) async throws -> ShowNotificationResponse {
+        guard config.allowedApps.contains(request.bundleID) else { throw HostError("\(request.bundleID) is not in the allowed apps") }
+        guard !ScreenLock.isLocked else { throw HostError("the host is locked. Unlock it, then try again.") }
+        let clicked = await notificationWatcher.click(id: request.id, appNames: Self.names(of: request.bundleID))
+        if clicked {
+            Log.info("notifications: clicked \(request.id) for a viewer")
+        } else {
+            Log.info("notifications: \(request.id) is gone; bringing \(request.bundleID) forward instead")
+            NSRunningApplication.runningApplications(withBundleIdentifier: request.bundleID).first?.activate()
+        }
+        // Give the app a moment to switch to the conversation, or open a window for it.
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        return ShowNotificationResponse(clicked: clicked)
+    }
+
+    // MARK: - Sound
+
+    /// Manual rendering mode: no microphone or speakers, audio in and out through buffers only.
+    /// main.swift calls this at launch for a host; start() again, for a Mac switched to host mode.
+    nonisolated static func useNoAudioDevice() {
+        guard !AudioManager.shared.isManualRenderingMode else { return }
+        do {
+            try AudioManager.shared.setManualRenderingMode(true)
+        } catch {
+            Log.warn("sound: manual rendering mode failed: \(error)")
+        }
+    }
+
+    /// App audio goes out as a "microphone" track fed by the mixer; voice processing would mangle music.
+    private static let appAudioCapture = AudioCaptureOptions(echoCancellation: false, autoGainControl: false, noiseSuppression: false,
+                                                             highpassFilter: false, typingNoiseDetection: false)
+    private static let appAudioPublish = AudioPublishOptions(name: TrackName.appAudio, encoding: AudioEncoding(maxBitrate: 64000))
+
+    /// Sound runs while a viewer is connected: the shared apps' audio out and, when there is a
+    /// virtual device for it to play into, the viewer's microphone in.
+    private func updateSound() {
+        let connected = state == .hosting && !room.remoteParticipants.isEmpty
+        let sendAudio = connected && config.audioEnabled
+        if sendAudio { appAudio.start(allowedApps: config.allowedApps) } else { appAudio.stop() }
+        if sendAudio != appAudioPublished {
+            appAudioPublished = sendAudio
+            let room = room
+            enqueueSound {
+                do {
+                    try await room.localParticipant.setMicrophone(enabled: sendAudio, captureOptions: Self.appAudioCapture,
+                                                                  publishOptions: Self.appAudioPublish)
+                    Log.info(sendAudio ? "sound: sending the shared apps' audio" : "sound: stopped sending audio")
+                } catch {
+                    Log.warn("sound: could not \(sendAudio ? "send" : "stop") the shared apps' audio: \(error)")
+                }
+            }
+        }
+
+        // Watch for a listening app while hosting, so the Sound section can show it before anyone connects;
+        // play into the device only while a viewer is there to send its microphone.
+        let configured = state == .hosting ? microphoneDevice : nil
+        let device = connected ? configured : nil
+        if device?.uid != virtualMicrophone?.device.uid {
+            if let old = virtualMicrophone {
+                viewerMicrophone?.remove(audioRenderer: old)
+                old.stop()
+            }
+            virtualMicrophone = nil
+            if let device {
+                do {
+                    let microphone = try VirtualMicrophone(device: device)
+                    viewerMicrophone?.add(audioRenderer: microphone)
+                    virtualMicrophone = microphone
+                    Log.info("sound: the viewer's microphone plays into \(device.name)")
+                } catch {
+                    Log.warn("sound: can't play the viewer's microphone into \(device.name): \(error)")
+                }
+            }
+        }
+        if configured != nil { startMicrophoneWatch() } else { stopMicrophoneWatch() }
+    }
+
+    /// Picks up a virtual device that was just installed (or removed) without a restart.
+    private func watchAudioDevices() {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.audioDevicesChanged() }
+        }
+    }
+
+    private func audioDevicesChanged() {
+        let devices = VirtualAudioDevice.all()
+        guard devices != virtualDevices else { return }
+        virtualDevices = devices
+        Log.info("sound: virtual audio devices: \(devices.isEmpty ? "none" : devices.map(\.name).joined(separator: ", "))")
+        updateSound()
+    }
+
+    private func stopSound() {
+        appAudio.stop()
+        appAudioPublished = false
+        stopMicrophoneWatch()
+        if let virtualMicrophone {
+            viewerMicrophone?.remove(audioRenderer: virtualMicrophone)
+            virtualMicrophone.stop()
+        }
+        virtualMicrophone = nil
+        viewerMicrophone = nil
+    }
+
+    private func enqueueSound(_ work: @escaping @MainActor () async -> Void) {
+        let previous = soundQueue
+        soundQueue = Task { @MainActor in
+            await previous?.value
+            await work()
+        }
+    }
+
+    /// Checks once a second whether a shared app listens to a microphone, a call starting, say.
+    private func startMicrophoneWatch() {
+        guard microphoneTimer == nil else { return }
+        microphoneTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkMicrophoneUse() }
+        }
+        checkMicrophoneUse()
+    }
+
+    private func stopMicrophoneWatch() {
+        microphoneTimer?.invalidate()
+        microphoneTimer = nil
+        if microphoneListener != nil {
+            microphoneListener = nil
+            sendStatus()
+        }
+    }
+
+    private func checkMicrophoneUse() {
+        let apps = config.allowedApps
+        Task.detached(priority: .utility) { [weak self] in
+            let listener = MicrophoneUse.listeningApp(among: apps)
+            await self?.setMicrophoneListener(listener)
+        }
+    }
+
+    private func setMicrophoneListener(_ app: String?) {
+        guard app != microphoneListener, microphoneTimer != nil else { return }
+        microphoneListener = app
+        Log.info(app.map { "sound: \($0) listens to a microphone; asking the viewer for its microphone" }
+            ?? "sound: no shared app listens to a microphone any more")
+        sendStatus()
+    }
+
+    private func viewerMicrophoneArrived(_ track: RemoteAudioTrack) {
+        if let previous = viewerMicrophone, let virtualMicrophone { previous.remove(audioRenderer: virtualMicrophone) }
+        viewerMicrophone = track
+        if let virtualMicrophone { track.add(audioRenderer: virtualMicrophone) }
+        Log.info("sound: the viewer's microphone is on")
+    }
+
+    private func viewerMicrophoneLeft(_ track: RemoteAudioTrack?) {
+        guard let current = viewerMicrophone, track == nil || current === track else { return }
+        if let virtualMicrophone { current.remove(audioRenderer: virtualMicrophone) }
+        viewerMicrophone = nil
+        Log.info("sound: the viewer's microphone is off")
+    }
+
     // MARK: - Screen lock
 
     private func watchScreenLock() {
@@ -236,18 +463,18 @@ final class HostController: NSObject, ObservableObject {
         let center = DistributedNotificationCenter.default()
         for name in ["com.apple.screenIsLocked", "com.apple.screenIsUnlocked"] {
             lockObservers.append(center.addObserver(forName: .init(name), object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.sendLockState() }
+                MainActor.assumeIsolated { self?.sendStatus() }
             })
         }
     }
 
-    /// Tells viewers when the lock state changes; `force` resends it, for a viewer that just joined.
-    private func sendLockState(force: Bool = false) {
-        let locked = ScreenLock.isLocked
-        guard force || locked != sentLocked, !room.remoteParticipants.isEmpty else { return }
-        if locked != sentLocked { Log.info(locked ? "screen locked; input can't reach apps" : "screen unlocked") }
-        sentLocked = locked
-        guard let data = try? JSONEncoder().encode(HostStatus(locked: locked)) else { return }
+    /// Tells viewers when the lock state or the microphone wish changes; `force` resends it, for a viewer that just joined.
+    private func sendStatus(force: Bool = false) {
+        let status = HostStatus(locked: ScreenLock.isLocked, microphoneWanted: microphoneListener != nil)
+        guard force || status != sentStatus, !room.remoteParticipants.isEmpty else { return }
+        if status.locked != sentStatus?.locked { Log.info(status.locked ? "screen locked; input can't reach apps" : "screen unlocked") }
+        sentStatus = status
+        guard let data = try? JSONEncoder().encode(status) else { return }
         Task { try? await room.localParticipant.publish(data: data, options: DataPublishOptions(topic: Topic.hostStatus, reliable: true)) }
     }
 
@@ -316,6 +543,14 @@ final class HostController: NSObject, ObservableObject {
     }
 
     func isAllowed(_ bundleID: String) -> Bool { config.allowedApps.contains(bundleID) }
+
+    func setAudio(_ on: Bool) { config.audio = on }
+
+    /// A device UID, "" for off, or nil for a BlackHole device found by itself.
+    func setMicrophoneDevice(_ uid: String?) { config.microphoneDevice = uid }
+
+    /// The device the viewer's microphone plays into, by the current setting.
+    var microphoneDevice: VirtualAudioDevice? { VirtualAudioDevice.resolve(config.microphoneDevice, in: virtualDevices) }
 
     func setKeepAlive(_ on: Bool) {
         config.keepAlive = on
@@ -493,6 +728,13 @@ final class HostController: NSObject, ObservableObject {
                 return try await AppCatalog.quit(request, allowedApps: self.config.allowedApps).jsonString()
             }
         }
+        try await room.registerRpcMethod(RPCMethod.showNotification) { [weak self] data in
+            await RPCReply.wrap {
+                guard let self else { throw HostError("host is shutting down") }
+                let request = try ShowNotificationRequest.fromJSON(data.payload)
+                return try await self.showNotification(request).jsonString()
+            }
+        }
         try await room.registerRpcMethod(RPCMethod.icon) { data in
             await RPCReply.wrap {
                 let request = try IconRequest.fromJSON(data.payload)
@@ -555,7 +797,7 @@ final class HostController: NSObject, ObservableObject {
               let portal = portals[event.windowID]
         else { return }
         // In case a lock notification was missed: a key or click is when it matters.
-        if event.kind == .keyDown || event.kind == .mouseDown { sendLockState() }
+        if event.kind == .keyDown || event.kind == .mouseDown { sendStatus() }
         injector.handle(event, portal: portal)
     }
 
@@ -603,13 +845,17 @@ final class HostController: NSObject, ObservableObject {
         // Stop capturing once the last viewer is gone.
         guard room.remoteParticipants.isEmpty else { return }
         clipboard.stop()
+        updateNotificationWatch()
+        updateSound()
         for id in Array(portals.keys) { await close(id) }
     }
 
     private func viewerJoined() {
         viewers = room.remoteParticipants.values.compactMap { $0.identity?.stringValue }
         if config.clipboardSyncEnabled { clipboard.start() }
-        sendLockState(force: true)
+        updateNotificationWatch()
+        updateSound()
+        sendStatus(force: true)
     }
 }
 
@@ -624,6 +870,18 @@ extension HostController: RoomDelegate {
         case Topic.clipboard: Task { @MainActor in self.applyClipboard(data) }
         default: break
         }
+    }
+
+    nonisolated func room(_: Room, participant _: RemoteParticipant, didSubscribeTrack publication: RemoteTrackPublication) {
+        guard publication.name == TrackName.microphone, let track = publication.track as? RemoteAudioTrack else { return }
+        Task { @MainActor in self.viewerMicrophoneArrived(track) }
+    }
+
+    nonisolated func room(_: Room, participant _: RemoteParticipant, didUnsubscribeTrack publication: RemoteTrackPublication) {
+        // The track can be gone from the publication by now.
+        guard publication.name == TrackName.microphone else { return }
+        let track = publication.track as? RemoteAudioTrack
+        Task { @MainActor in self.viewerMicrophoneLeft(track) }
     }
 
     nonisolated func room(_: Room, participantDidConnect participant: RemoteParticipant) {

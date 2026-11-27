@@ -180,6 +180,10 @@ struct ViewerView: View {
                 Notice(text: "\(host.name) is locked. Its windows still show, but typing and opening new windows won't work until you unlock it, for example with Screen Sharing.", kind: .warning)
                     .padding(.horizontal, 20).padding(.bottom, 10)
             }
+            if viewer.microphoneLive {
+                Notice(text: "Your microphone goes to \(host.name): an app shared from there is listening to one, such as in a call. It stops when that app stops listening.", kind: .info)
+                    .padding(.horizontal, 20).padding(.bottom, 10)
+            }
             if let notice = viewer.notice {
                 Notice(text: notice, kind: notice.hasPrefix("Could not") ? .error : .info)
                     .padding(.horizontal, 20).padding(.bottom, 10)

@@ -6,7 +6,7 @@ import TeleportCore
 /// The host's window: a sidebar of sections, each of which fits the window without scrolling.
 /// Overview answers "is it working?" at a glance; the other sections hold the details.
 struct HostView: View {
-    enum Section: Hashable { case overview, apps, macs, running }
+    enum Section: Hashable { case overview, apps, macs, sound, running }
 
     @ObservedObject var app: AppModel
     @ObservedObject var host: HostController
@@ -14,6 +14,9 @@ struct HostView: View {
     @Local private var showAddApp = false
     @Local private var loginNotice: String?
     @Local private var loginStatus: SMAppService.Status = .notRegistered
+    /// The install steps fold out by themselves until a virtual device is found.
+    @Local private var showInstall: Bool?
+    @Local private var installNotice: String?
     /// Picks up permissions granted in System Settings; the checks run off the main thread.
     private let permissionPoll = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -26,6 +29,7 @@ struct HostView: View {
                 SidebarRow(icon: "gauge.with.dots.needle.50percent", title: "Overview", badge: problems.isEmpty ? .none : .attention, selected: section == .overview) { section = .overview }
                 SidebarRow(icon: "square.grid.2x2", title: "Apps", badge: .count(host.config.allowedApps.count), selected: section == .apps) { section = .apps }
                 SidebarRow(icon: "laptopcomputer", title: "Paired Macs", badge: connectedDevices.isEmpty ? .count(host.trusted.count) : .live(connectedDevices.count), selected: section == .macs) { section = .macs }
+                SidebarRow(icon: "speaker.wave.2", title: "Sound", badge: .none, selected: section == .sound) { section = .sound }
                 SidebarRow(icon: "bolt.shield", title: "Keep it running", badge: runningNeedsAttention ? .attention : .none, selected: section == .running) { section = .running }
                 Spacer()
                 sidebarFooter
@@ -35,6 +39,7 @@ struct HostView: View {
                     case .overview: overview
                     case .apps: appsSection
                     case .macs: macsSection
+                    case .sound: soundSection
                     case .running: runningSection
                     }
                 }
@@ -375,6 +380,111 @@ struct HostView: View {
     }
 
     private var runningNeedsAttention: Bool { !comesBackAfterRestart }
+
+    // MARK: - Sound
+
+    private var soundSection: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                SectionHeader(title: "Sound", subtitle: "The shared apps' sound goes to the connected Mac, and its microphone can come back for calls.")
+                Card {
+                    setting("Send the shared apps' sound", "Teams ringing, a video, the other side of a call. Teleport plays nothing on this Mac and needs no speakers or microphone here.",
+                            isOn: Binding(get: { host.config.audioEnabled }, set: { host.setAudio($0) }))
+                }
+                microphoneCard
+            }
+        }
+    }
+
+    private var microphoneCard: some View {
+        Card(title: "Microphone for calls", subtitle: "Optional. The viewer's microphone plays into a virtual audio device, which the app on this Mac uses as its microphone.") {
+            VStack(alignment: .leading, spacing: 10) {
+                let device = host.microphoneDevice
+                if let device {
+                    CheckRow(state: .ok, title: "\(device.name) is installed", detail: "The viewer's microphone plays into it.")
+                } else if host.config.microphoneDevice == "" {
+                    CheckRow(state: .info, title: "Off", detail: "The viewer's microphone isn't used.")
+                } else if host.virtualDevices.isEmpty {
+                    CheckRow(state: .warn, title: "No virtual audio device yet", detail: "Install BlackHole 2ch; the steps are below.")
+                } else {
+                    CheckRow(state: .warn, title: "Pick a device", detail: "No BlackHole device was found; choose one of the virtual devices below.")
+                }
+                Picker("Viewer's microphone plays into", selection: Binding(get: { host.config.microphoneDevice ?? "automatic" },
+                                                                            set: { host.setMicrophoneDevice($0 == "automatic" ? nil : $0) })) {
+                    Text(VirtualAudioDevice.resolve(nil, in: host.virtualDevices).map { "Automatic (\($0.name))" } ?? "Automatic (BlackHole, once installed)").tag("automatic")
+                    ForEach(host.virtualDevices) { Text($0.name).tag($0.uid) }
+                    Text("Off").tag("")
+                }
+                .frame(maxWidth: 460)
+                if let device {
+                    if let listener = host.microphoneListener {
+                        CheckRow(state: .ok, title: "\(appName(listener)) is listening to a microphone",
+                                 detail: "A connected viewer with the microphone turned on is sending it now.")
+                    } else {
+                        CheckRow(state: .info, title: "No shared app is listening to a microphone",
+                                 detail: "In a call this turns green. If it doesn't, choose \(device.name) as the microphone in the app.")
+                    }
+                }
+                DisclosureGroup(isExpanded: Binding(get: { showInstall ?? (device == nil && host.config.microphoneDevice != "") },
+                                                    set: { showInstall = $0 })) {
+                    installSteps.padding(.top, 8)
+                } label: {
+                    Text("How to set it up").font(.callout.weight(.medium))
+                }
+            }
+        }
+    }
+
+    private var installSteps: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            step(1, "Install BlackHole 2ch on this Mac", "A free virtual audio device. The install asks for an administrator password; a company-managed Mac may block it, so ask IT if it fails.") {
+                HStack(spacing: 8) {
+                    if VirtualDeviceInstall.homebrew != nil {
+                        Button {
+                            do {
+                                try VirtualDeviceInstall.runInTerminal()
+                                installNotice = nil
+                            } catch {
+                                installNotice = "Could not open Terminal: \(error)"
+                            }
+                        } label: { Label("Run in Terminal", systemImage: "play.fill") }
+                            .primaryAction()
+                        Text(VirtualDeviceInstall.command).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(VirtualDeviceInstall.command, forType: .string)
+                        } label: { Image(systemName: "doc.on.doc") }
+                            .buttonStyle(.plain).help("Copy the command")
+                    } else {
+                        Button { NSWorkspace.shared.open(VirtualDeviceInstall.project) } label: { Label("Download BlackHole", systemImage: "arrow.down.circle") }
+                            .primaryAction()
+                        Text("Homebrew isn't installed here, so use the installer from the project page.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if let installNotice { Notice(text: installNotice, kind: .error) }
+            step(2, "Check that Teleport found it", "The first line above turns green with the device's name. No restart needed.") { EmptyView() }
+            step(3, "Make it the app's microphone", "In the shared app on this Mac, choose BlackHole 2ch as the microphone, such as Teams › Settings › Devices › Microphone. Keep its speaker on something else, or the call hears itself.") { EmptyView() }
+            step(4, "Turn on the microphone on the viewer", "On the Mac you work on: Settings › Sound › Send this Mac's microphone to shared apps. It is only sent while the app here listens, so during calls.") { EmptyView() }
+        }
+    }
+
+    private func step(_ number: Int, _ title: String, _ detail: String, @ViewBuilder extra: () -> some View) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("\(number)").font(.callout.weight(.semibold)).foregroundStyle(.white)
+                .frame(width: 22, height: 22).background(Theme.remote, in: Circle())
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.callout.weight(.medium))
+                Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                extra()
+            }
+        }
+    }
+
+    private func appName(_ bundleID: String) -> String {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+            .map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? bundleID
+    }
 
     private var runningSection: some View {
         VStack(alignment: .leading, spacing: 16) {

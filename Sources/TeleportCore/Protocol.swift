@@ -257,12 +257,82 @@ public extension Topic {
     static let hostStatus = "hostStatus"
 }
 
-public struct HostStatus: Codable {
+public struct HostStatus: Codable, Equatable {
     /// The host's screen is locked, so typing and new windows can't reach its apps.
     public var locked: Bool
-    public init(locked: Bool) { self.locked = locked }
+    /// A shared app on the host is listening to a microphone (in a call, say), and the host
+    /// passes the viewer's microphone on to it. Nil from hosts before sound.
+    public var microphoneWanted: Bool?
+    public init(locked: Bool, microphoneWanted: Bool? = nil) {
+        self.locked = locked
+        self.microphoneWanted = microphoneWanted
+    }
+}
+
+// MARK: - Sound
+
+public extension TrackName {
+    /// Host to viewer: the sound of the shared apps.
+    static let appAudio = "app-audio"
+    /// Viewer to host: this Mac's microphone, while a shared app on the host listens to one.
+    static let microphone = "viewer-mic"
 }
 
 public enum Discovery {
     public static let serviceType = "_teleport._tcp"
+}
+
+// MARK: - Notifications
+
+public extension Topic {
+    /// Host to viewer: a notification an app shared with the viewer showed on the host.
+    static let notifications = "notifications"
+}
+
+public extension RPCMethod {
+    /// Viewer to host: the notification was clicked; click it on the host too, so its app opens where it points.
+    static let showNotification = "teleport.showNotification"
+}
+
+/// A notification banner from a shared app, as the host saw it.
+public struct RemoteNotification: Codable, Equatable {
+    /// The banner's identifier on the host, for `showNotification`.
+    public var id: String
+    public var bundleID: String
+    /// The app's name as the host shows it.
+    public var app: String
+    public var title: String
+    public var subtitle: String
+    public var body: String
+
+    public init(id: String, bundleID: String, app: String, title: String, subtitle: String, body: String) {
+        self.id = id
+        self.bundleID = bundleID
+        self.app = app
+        self.title = title
+        self.subtitle = subtitle
+        self.body = body
+    }
+
+    /// Data packets are capped at 15 KB; a banner never shows this much text anyway.
+    public func trimmed() -> RemoteNotification {
+        func cut(_ text: String, _ limit: Int) -> String { text.count > limit ? String(text.prefix(limit - 1)) + "…" : text }
+        return RemoteNotification(id: String(id.prefix(64)), bundleID: bundleID, app: cut(app, 100), title: cut(title, 300),
+                                  subtitle: cut(subtitle, 300), body: cut(body, 2000))
+    }
+}
+
+public struct ShowNotificationRequest: Codable {
+    public var id: String
+    public var bundleID: String
+    public init(id: String, bundleID: String) {
+        self.id = id
+        self.bundleID = bundleID
+    }
+}
+
+/// `clicked` is false when the banner was gone from the host; the app was brought forward instead.
+public struct ShowNotificationResponse: Codable {
+    public var clicked: Bool
+    public init(clicked: Bool) { self.clicked = clicked }
 }

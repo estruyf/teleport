@@ -88,6 +88,42 @@ Once connected, the viewer lists the host's shared apps with their windows; a ch
 - Copied text syncs both ways (up to 14 KB). Turn it off with `clipboardSync` in [`config.json`](configuration.md#configjson).
 - Drop a file on a portal to send it to the host; it lands in `~/Downloads/Teleport/` there. This is experimental.
 - If the connection drops, the viewer keeps trying for two minutes and reopens its portals.
+- Notifications from the shared apps show up here as Teleport notifications, with the app's icon. See [notifications](#notifications).
+- You hear the shared apps, and can talk in their calls. See [sound and microphone](#sound-and-microphone).
+
+## Sound and microphone
+
+While a viewer is connected, the host captures the sound of the shared apps (and only those) and sends it along. You hear Teams ringing, a video playing, or the other side of a call through your own speakers or headset. The host plays nothing itself: its audio engine uses no device, so a Mac without a microphone works, and Teleport makes no sound in the office. The apps' own sound still comes out of the host's speakers if it has any; turn its volume down there.
+
+Turn it off in the host's window under *Sound*, on the viewer under *Settings › Sound*, or with `audio` in [`config.json`](configuration.md#configjson).
+
+### Talking in calls
+
+Your microphone can go to the shared apps too. It is off by default, and it takes a bit of setup, because macOS only lets an app listen to a microphone device. The host's window walks you through it under *Sound › Microphone for calls › How to set it up*, with a button that runs the install in Terminal:
+
+1. **On the host**, install the free virtual audio device BlackHole 2ch: `brew install --cask blackhole-2ch`, which asks for an administrator password. Without Homebrew, use the installer from the [BlackHole project](https://github.com/ExistentialAudio/BlackHole). A company-managed Mac may block the install.
+2. **On the host**, check that Teleport found it: the Sound section shows the device, and *Viewer's microphone plays into* picks it on *Automatic*. No restart needed.
+3. **On the host**, pick the same device as the microphone in the app, such as *Teams › Settings › Devices › Microphone*. Leave the app's speaker on something else, or the call hears itself.
+4. **On the viewer**, turn on *Settings › Sound › Send this Mac's microphone to shared apps*. macOS asks for microphone access right away.
+
+During a call the host's Sound section shows which app is listening, which is a quick way to check step 3.
+
+The viewer then sends its microphone only while a shared app on the host is listening to one: a call is on, say. The host checks this once a second. While it is on, the viewer's window says so and macOS shows its microphone indicator; when the call ends it stops. Echo cancellation runs on the viewer, so you can use speakers instead of a headset.
+
+## Notifications
+
+While a viewer is connected, the host reads the notification banners macOS shows and sends on the ones from shared apps. Notifications from other apps stay on the host. On the viewer they appear as Teleport's, with the app's name under the title and its icon beside it. Clicking one clicks the banner on the host too, so the app opens on what the notification is about (a chat, a mail), and brings that app's portal forward or opens one.
+
+Turn it off on either Mac under *Settings › Between Macs › Notifications from shared apps*, or with `notifications` in [`config.json`](configuration.md#configjson). The viewer asks for permission to show notifications the first time one arrives; after that it is in *System Settings › Notifications › Teleport*.
+
+Some things on the host decide whether there is a banner to send:
+
+- The app's notification style in *System Settings › Notifications* must be *Banners* or *Alerts*, and no Focus may be on.
+- The host must be unlocked; see [keep the host reachable](#keep-the-host-reachable).
+- macOS hands a notification to the app itself, without a banner, while that app is frontmost on the host. Apps like Teams then decide for themselves whether to show one. Which app is frontmost there follows the portal you last used.
+- Banners replace each other, and the host checks a few times a second, so of several that arrive within a fraction of a second only the last may come through.
+
+The host reads banners through Accessibility, which it already needs for input. There is no macOS API for another app's notifications, so a macOS update can change what it reads; the host log says `notifications: forwarded …` for each one it sends.
 
 ## Try it on one Mac
 

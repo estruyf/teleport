@@ -11,7 +11,8 @@ What protects a Teleport host, and what doesn't yet. Whoever controls a viewer c
 | Allow | The host shows the viewer's name and a 6-digit fingerprint of the shared key; the viewer shows the same. A man-in-the-middle produces different digits. Nothing is stored until Allow; Deny or 60 seconds throw it away. |
 | Trust | `trust.json` on the host: name and public key of each allowed viewer. Revoke removes it and kicks a live session. `hosts.json` on the viewer: name, address, host key. |
 | Session | The viewer asks the host's control endpoint (port+3) for a LiveKit token: timestamp and nonce sealed with the agreement-only key. Timestamp within 60 s, nonce single-use. Tokens last one hour; LiveKit refreshes them while connected. The LiveKit secret never leaves the host. |
-| Apps | The allow-list is enforced on `apps`, `open` and `launch`. Nothing is shared until an app is added. |
+| Apps | The allow-list is enforced on `apps`, `open`, `launch` and `showNotification`. Nothing is shared until an app is added. Notification banners are only sent for apps on the list, matched by the app name Notification Center shows; the rest never leave the host. Sound is captured only from the shared apps' processes. |
+| Microphone | Off unless turned on on the viewer. Even then it is only sent while a shared app on the host listens to a microphone, and it plays into the virtual device chosen on the host, where any app that picks that device can hear it. |
 | Input | Only room participants can send input, and only paired viewers get tokens. |
 | Files | Dropped files land in `~/Downloads/Teleport/<basename>`; the name is reduced to its last path component. |
 | Media | WebRTC media is DTLS-SRTP encrypted end to end. |
