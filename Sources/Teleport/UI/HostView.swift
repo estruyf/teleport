@@ -234,6 +234,14 @@ struct HostView: View {
                 CheckRow(state: host.hasAccessibility ? .ok : .bad, title: "Accessibility",
                          detail: host.hasAccessibility ? nil : "Needed for viewers to click and type.",
                          action: host.hasAccessibility ? nil : ("Open Settings", { SystemSettings.open("Privacy_Accessibility") }))
+                if host.config.downloadsEnabled, host.downloadsAccess == .asking {
+                    CheckRow(state: .warn, title: "macOS is asking for access to Downloads",
+                             detail: "Answer it on this Mac, through Screen Sharing if it has no screen. Until then downloads from shared apps aren't sent.")
+                } else if host.config.downloadsEnabled, host.downloadsAccess == .denied {
+                    CheckRow(state: .warn, title: "No access to Downloads",
+                             detail: "Downloads from shared apps aren't sent. Allow Teleport under Files and Folders, or turn it off in Settings.",
+                             action: ("Open Settings", { SystemSettings.open("Privacy_FilesAndFolders") }))
+                }
                 CheckRow(state: host.config.allowedApps.isEmpty ? .warn : .ok,
                          title: host.config.allowedApps.isEmpty ? "No apps shared yet" : "\(host.config.allowedApps.count) app\(host.config.allowedApps.count == 1 ? "" : "s") shared",
                          action: ("Manage", { section = .apps }))

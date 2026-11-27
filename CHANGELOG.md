@@ -4,6 +4,13 @@ All notable changes to Teleport. The format follows [Keep a Changelog](https://k
 
 ## [Unreleased]
 
+### Added
+
+- **Images on the clipboard.** Copy a screenshot on one Mac and paste it into a chat on the other, both ways, up to 25 MB.
+- **Downloads come to you.** A file a shared app saves to the host's Downloads, such as a Teams attachment, lands in your Downloads with a notification. Other apps' downloads stay on the host.
+- **Unread counts.** A shared app's Dock badge shows on its Dock icon on your Mac and in the menu bar's app list, even before you open one of its windows.
+- **Host health in the menu bar.** The icon turns orange while the host is locked and red while the connection is lost. While you're not connected, the menu shows each paired Mac as online or offline, and can wake one that sleeps on the same network.
+
 ## [0.2.0] - 2026-11-27
 
 Hear the shared apps, talk in their calls, and get their notifications.

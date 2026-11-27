@@ -32,6 +32,7 @@ Everything is in `~/.teleport`, or in `$TELEPORT_HOME` when that is set.
 | `livekitServerPath` | unset | An explicit path to `livekit-server`, instead of the bundled one or Homebrew's. |
 | `clipboardSync` | on | Share clipboard text with the other Mac. |
 | `sounds` | off | A short sound when a portal opens or a Mac pairs. |
+| `downloads` | on | Host: send files the shared apps save to Downloads. Viewer: save them to Downloads here. |
 | `audio` | on | Host: send the shared apps' sound (the *Sound* section). Viewer: play it (*Settings › Sound*). See [sound and microphone](getting-started.md#sound-and-microphone). |
 | `microphone` | off | Viewer: send this Mac's microphone while a shared app on the host listens to one. |
 | `microphoneDevice` | unset | Host: UID of the virtual audio device the viewer's microphone plays into. Unset picks a BlackHole device; `""` turns it off. |

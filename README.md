@@ -35,7 +35,8 @@ Teleport fixes that. I open just the app I need, and it shows up as a normal win
 - **Pair once, safely.** A one-time 6-digit code and a fingerprint check on both Macs. No accounts, no cloud relay, and the host decides which apps are reachable.
 - **Find Macs by name.** Hosts on the same network (Bonjour) or your Tailscale tailnet show up by name.
 - **Remote control of apps.** Launch apps, open new windows and quit apps on the host from the viewer's window or menu bar.
-- **Clipboard and files.** Text clipboard both ways; drop a file on a portal to send it to the host (experimental).
+- **Clipboard and files.** Text and images on the clipboard both ways. Drop a file on a portal to send it to the host; files a shared app downloads there land in your Downloads.
+- **Unread counts.** A shared app's Dock badge shows on its Dock icon on your Mac, even before you open a window.
 - **Sound, and optionally your microphone.** Hear the shared apps: Teams ringing, a video, the other side of a call. Turn on the microphone to talk in calls too.
 - **Notifications.** Banners from the shared apps on the host show up on your Mac; click one to open that app where the notification points.
 - **Stays up.** The viewer reconnects after a network blip, the host restarts its streaming server if it dies, and a login item brings the host back after a reboot.

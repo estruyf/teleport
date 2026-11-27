@@ -278,6 +278,29 @@ public extension TrackName {
     static let microphone = "viewer-mic"
 }
 
+// MARK: - Clipboard images, downloads and badges
+
+public extension Topic {
+    /// Clipboard images as PNG byte streams, both directions.
+    static let clipboardImage = "clipboard-image"
+    /// Host to viewer: files a shared app saved to the host's Downloads, as byte streams.
+    static let downloads = "downloads"
+    /// Host to viewer: the Dock badges (unread counts) of the shared apps.
+    static let badges = "badges"
+}
+
+/// Attributes on a `downloads` stream.
+public enum DownloadKeys {
+    /// The name of the shared app that saved the file.
+    public static let app = "app"
+}
+
+/// Badge text by bundle ID; an app without a badge is left out. Sent whole whenever one changes.
+public struct AppBadges: Codable, Equatable {
+    public var badges: [String: String]
+    public init(badges: [String: String]) { self.badges = badges }
+}
+
 public enum Discovery {
     public static let serviceType = "_teleport._tcp"
 }

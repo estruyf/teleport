@@ -7,6 +7,8 @@ import TeleportCore
 final class DockTileManager {
     private var tiles: [String: Process] = [:]
     private var observer: NSObjectProtocol?
+    /// Badge text by remote app, passed to its tile when it starts and whenever it changes.
+    private var badges: [String: String] = [:]
 
     /// Called when the user clicks a tile; the viewer brings that app's portals forward.
     var onActivate: ((String) -> Void)?
@@ -45,7 +47,7 @@ final class DockTileManager {
 
             let process = Process()
             process.executableURL = binary
-            process.arguments = ["--bundle-id", bundleID, "--icon", iconURL.path]
+            process.arguments = ["--bundle-id", bundleID, "--icon", iconURL.path] + (badges[bundleID].map { ["--badge", $0] } ?? [])
             process.terminationHandler = { [weak self] _ in
                 Task { @MainActor in self?.tiles.removeValue(forKey: bundleID) }
             }
@@ -54,6 +56,18 @@ final class DockTileManager {
         } catch {
             Log.warn("could not start Dock tile for \(appName): \(error)")
         }
+    }
+
+    func hasTile(bundleID: String) -> Bool { tiles[bundleID]?.isRunning == true }
+
+    /// The remote app's unread count on its tile; nil clears it.
+    func setBadge(bundleID: String, _ label: String?) {
+        guard badges[bundleID] != label else { return }
+        badges[bundleID] = label
+        DistributedNotificationCenter.default().postNotificationName(
+            DockTileIPC.badge, object: nil,
+            userInfo: [DockTileIPC.bundleIDKey: bundleID, DockTileIPC.badgeKey: label ?? ""], deliverImmediately: true
+        )
     }
 
     func removeTile(bundleID: String) {
@@ -67,6 +81,7 @@ final class DockTileManager {
     }
 
     func removeAll() {
+        badges = [:]
         DistributedNotificationCenter.default().postNotificationName(DockTileIPC.quitAll, object: nil, userInfo: nil, deliverImmediately: true)
         for process in tiles.values where process.isRunning { process.terminate() }
         tiles.removeAll()

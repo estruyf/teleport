@@ -40,6 +40,18 @@ final class NotificationPresenter: NSObject {
         }
     }
 
+    /// A file from the host landed in Downloads; clicking the notification shows it in Finder.
+    func showDownload(_ file: URL, app: String?, hostName: String) async {
+        guard let center, await allowed(center) else { return }
+        let content = UNMutableNotificationContent()
+        content.title = file.lastPathComponent
+        content.subtitle = [app, hostName].compactMap { $0 }.joined(separator: " on ")
+        content.body = "Saved to Downloads. Click to show it in Finder."
+        content.userInfo = [Keys.file: file.path]
+        let request = UNNotificationRequest(identifier: "download.\(UUID().uuidString)", content: content, trigger: nil)
+        try? await center.add(request)
+    }
+
     /// Asks once; after that the answer lives in System Settings › Notifications › Teleport.
     private func allowed(_ center: UNUserNotificationCenter) async -> Bool {
         let status = await center.notificationSettings().authorizationStatus
@@ -61,6 +73,7 @@ final class NotificationPresenter: NSObject {
     private enum Keys {
         static let id = "id"
         static let bundleID = "bundleID"
+        static let file = "file"
     }
 }
 
@@ -73,6 +86,10 @@ extension NotificationPresenter: UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
         let info = response.notification.request.content.userInfo
+        if let path = info[Keys.file] as? String {
+            await MainActor.run { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+            return
+        }
         guard let id = info[Keys.id] as? String, let bundleID = info[Keys.bundleID] as? String else { return }
         await MainActor.run { self.onOpen?(id, bundleID) }
     }

@@ -85,8 +85,11 @@ Once connected, the viewer lists the host's shared apps with their windows; a ch
 
 - A portal is a native window with a teal border and a *Remote* badge, titled `<window> – Remote · <host>`. Each remote app gets its own Dock icon, named after the app.
 - Keyboard, mouse, scroll and resize go to the host window.
-- Copied text syncs both ways (up to 14 KB). Turn it off with `clipboardSync` in [`config.json`](configuration.md#configjson).
+- Copied text (up to 14 KB) and images (up to 25 MB, such as a screenshot to paste into a chat) sync both ways. Turn it off with *Share the clipboard* in Settings, or `clipboardSync` in [`config.json`](configuration.md#configjson).
 - Drop a file on a portal to send it to the host; it lands in `~/Downloads/Teleport/` there. This is experimental.
+- A file a shared app saves to the host's Downloads (an attachment from Teams, say) lands in your Downloads too, with a notification that shows it in Finder. Other apps' downloads stay on the host: Teleport tells them apart by the app macOS records on every download. The host asks once for access to its Downloads folder; on a Mac without a screen, answer that through Screen Sharing (the host's checklist says when it's waiting). Turn it off under *Settings › Between Macs › Downloads from shared apps*.
+- A shared app's unread count (its Dock badge on the host) shows on its Dock icon here, and in the menu bar's app list. An app with unread items gets a Dock icon even before you open one of its windows; clicking it opens the app.
+- The menu bar item shows how the host is doing. Its icon turns orange while the host is locked and red while the connection is lost. While you're not connected, the menu shows each paired Mac as online or offline, with *Wake* for one that sleeps on the same network (it needs *Wake for network access* on the host).
 - If the connection drops, the viewer keeps trying for two minutes and reopens its portals.
 - Notifications from the shared apps show up here as Teleport notifications, with the app's icon. See [notifications](#notifications).
 - You hear the shared apps, and can talk in their calls. See [sound and microphone](#sound-and-microphone).

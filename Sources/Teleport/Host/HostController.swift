@@ -44,6 +44,7 @@ final class HostController: NSObject, ObservableObject {
         didSet {
             try? config.save()
             updateNotificationWatch()
+            updateFileAndBadgeWatch()
             updateSound()
         }
     }
@@ -70,6 +71,12 @@ final class HostController: NSObject, ObservableObject {
     /// Virtual audio devices the viewer's microphone can play into; follows installs and removals.
     @Published private(set) var virtualDevices: [VirtualAudioDevice] = []
     private var soundQueue: Task<Void, Never>?
+    /// Whether Teleport may read this Mac's Downloads, which sending downloads needs.
+    @Published private(set) var downloadsAccess: DownloadsWatcher.Access = .unknown
+    /// For viewers that want to wake this Mac; read once when hosting starts.
+    private var wakeInfo: (macAddress: String?, wakesForNetwork: Bool?) = (nil, nil)
+    private lazy var downloadsWatcher = DownloadsWatcher { [weak self] url, app in self?.sendDownload(url, app: app) }
+    private lazy var badgeWatcher = DockBadgeWatcher { [weak self] badges in self?.sendBadges(badges) }
     private lazy var notificationWatcher = NotificationWatcher { [weak self] banner in self?.forward(banner) }
     private var portals: [CGWindowID: Portal] = [:]
     private var openingPortals: [CGWindowID: Task<Portal, Error>] = [:]
@@ -96,6 +103,7 @@ final class HostController: NSObject, ObservableObject {
         super.init()
         trusted = trustStore.load()
         room.add(delegate: self)
+        downloadsWatcher.onAccess = { [weak self] access in self?.downloadsAccess = access }
         virtualDevices = VirtualAudioDevice.all()
         watchAudioDevices()
     }
@@ -116,6 +124,11 @@ final class HostController: NSObject, ObservableObject {
         do {
             checkPermissions()
             refreshPermissions()
+            Task.detached(priority: .utility) { [weak self] in
+                let mac = NetworkIdentity.macAddress()
+                let wakes = NetworkIdentity.wakesForNetwork()
+                await self?.applyWakeInfo(mac, wakes)
+            }
             addresses = NetworkAddresses.current()
             // Opens every app bundle in /Applications; keep that off the main thread.
             installedApps = await Task.detached(priority: .userInitiated) { InstalledApps.scan() }.value
@@ -158,14 +171,18 @@ final class HostController: NSObject, ObservableObject {
                 try await room.registerByteStreamHandler(for: Topic.files) { [weak self] reader, _ in
                     await self?.receiveFile(reader)
                 }
+                try await room.registerByteStreamHandler(for: Topic.clipboardImage) { [weak self] reader, _ in
+                    await self?.receiveClipboardImage(reader)
+                }
                 handlersRegistered = true
             }
             try stillWanted()
             bonjour.start(name: config.deviceName, port: config.port, publicKey: identity.publicKeyHex)
-            clipboard.onChange = { [weak self] text in self?.broadcastClipboard(text) }
+            clipboard.onChange = { [weak self] content in self?.broadcastClipboard(content) }
             if config.keepAliveEnabled { keepAlive.start() }
             state = .hosting
             updateNotificationWatch()
+            updateFileAndBadgeWatch()
             updateSound()
             Log.info("hosting on port \(config.port); allowed apps: \(config.allowedApps.joined(separator: ", "))")
             Self.logVideoTuning(config.videoTuning)
@@ -197,6 +214,8 @@ final class HostController: NSObject, ObservableObject {
         cancelPairing()
         keepAlive.stop()
         notificationWatcher.stop()
+        downloadsWatcher.stop()
+        badgeWatcher.stop()
         stopSound()
         for id in Array(portals.keys) { await close(id) }
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
@@ -242,12 +261,14 @@ final class HostController: NSObject, ObservableObject {
 
     // MARK: - Clipboard
 
-    private func broadcastClipboard(_ text: String) {
-        // Escaping can make the JSON longer than the text; packets over the limit are dropped.
-        guard config.clipboardSyncEnabled, !room.remoteParticipants.isEmpty,
-              let data = try? JSONEncoder().encode(ClipboardMessage(text: text)), data.count <= ClipboardSync.maxBytes
-        else { return }
-        Task { try? await room.localParticipant.publish(data: data, options: DataPublishOptions(topic: Topic.clipboard, reliable: true)) }
+    private func broadcastClipboard(_ content: ClipboardSync.Content) {
+        guard config.clipboardSyncEnabled, !room.remoteParticipants.isEmpty else { return }
+        ClipboardSync.send(content, over: room)
+    }
+
+    private func receiveClipboardImage(_ reader: ByteStreamReader) async {
+        guard config.clipboardSyncEnabled else { return }
+        await clipboard.receiveImage(reader)
     }
 
     private func applyClipboard(_ data: Data) {
@@ -269,7 +290,7 @@ final class HostController: NSObject, ObservableObject {
     /// Sends a banner on to the viewers, if it comes from a shared app. Others never leave this Mac.
     private func forward(_ banner: NotificationWatcher.Banner) {
         guard config.notificationsEnabled, !room.remoteParticipants.isEmpty,
-              let bundleID = config.allowedApps.first(where: { BannerText.matches(banner.app, any: Self.names(of: $0)) })
+              let bundleID = Self.sharedApp(named: banner.app, in: config.allowedApps)
         else { return }
         let message = RemoteNotification(id: banner.id, bundleID: bundleID, app: banner.app, title: banner.title,
                                          subtitle: banner.subtitle, body: banner.body).trimmed()
@@ -278,8 +299,13 @@ final class HostController: NSObject, ObservableObject {
         Task { try? await room.localParticipant.publish(data: data, options: DataPublishOptions(topic: Topic.notifications, reliable: true)) }
     }
 
+    /// The shared app that goes by `name` (as Notification Center or a quarantine flag names it), or has it as its bundle ID.
+    nonisolated static func sharedApp(named name: String, in allowedApps: [String]) -> String? {
+        allowedApps.first { $0 == name || BannerText.matches(name, any: names(of: $0)) }
+    }
+
     /// The names an app goes by in Notification Center: its running name, its bundle's names and its file name.
-    private static func names(of bundleID: String) -> [String] {
+    nonisolated static func names(of bundleID: String) -> [String] {
         var names = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).compactMap(\.localizedName)
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
             names.append(FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: ""))
@@ -307,6 +333,41 @@ final class HostController: NSObject, ObservableObject {
         // Give the app a moment to switch to the conversation, or open a window for it.
         try? await Task.sleep(nanoseconds: 400_000_000)
         return ShowNotificationResponse(clicked: clicked)
+    }
+
+    // MARK: - Downloads and badges
+
+    /// Both run only while someone is connected to receive what they find.
+    private func updateFileAndBadgeWatch() {
+        let connected = state == .hosting && !room.remoteParticipants.isEmpty
+        if connected, config.downloadsEnabled {
+            downloadsWatcher.update(allowedApps: config.allowedApps)
+            downloadsWatcher.start()
+        } else {
+            downloadsWatcher.stop()
+        }
+        if connected { badgeWatcher.start(allowedApps: config.allowedApps) } else { badgeWatcher.stop() }
+    }
+
+    /// A file a shared app saved to Downloads, on to the viewer.
+    private func sendDownload(_ url: URL, app bundleID: String) {
+        guard config.downloadsEnabled, !room.remoteParticipants.isEmpty else { return }
+        let appName = Self.names(of: bundleID).first ?? bundleID
+        let room = room
+        Task {
+            do {
+                let options = StreamByteOptions(topic: Topic.downloads, attributes: [DownloadKeys.app: appName], name: url.lastPathComponent, compress: false)
+                _ = try await room.localParticipant.sendFile(url, options: options)
+                Log.info("downloads: sent \(url.lastPathComponent) from \(bundleID)")
+            } catch {
+                Log.warn("downloads: could not send \(url.lastPathComponent): \(error)")
+            }
+        }
+    }
+
+    private func sendBadges(_ badges: [String: String]) {
+        guard !room.remoteParticipants.isEmpty, let data = try? JSONEncoder().encode(AppBadges(badges: badges)) else { return }
+        Task { try? await room.localParticipant.publish(data: data, options: DataPublishOptions(topic: Topic.badges, reliable: true)) }
     }
 
     // MARK: - Sound
@@ -514,6 +575,8 @@ final class HostController: NSObject, ObservableObject {
         }
     }
 
+    private func applyWakeInfo(_ mac: String?, _ wakes: Bool?) { wakeInfo = (mac, wakes) }
+
     private func applySignIn(_ setup: SignInSetup) {
         if signIn != setup { signIn = setup }
     }
@@ -619,7 +682,7 @@ final class HostController: NSObject, ObservableObject {
         switch (method, path) {
         case ("GET", ControlPath.info):
             return json(HostInfo(name: config.deviceName, publicKey: identity.publicKeyHex, version: TeleportVersion.string, port: config.port,
-                                 timeMs: TestPattern.nowMs()))
+                                 timeMs: TestPattern.nowMs(), macAddress: wakeInfo.macAddress, wakesForNetwork: wakeInfo.wakesForNetwork))
 
         case ("POST", ControlPath.pair):
             guard let request = try? JSONDecoder().decode(PairRequest.self, from: body) else { return json(ControlError("bad request"), 400) }
@@ -804,14 +867,11 @@ final class HostController: NSObject, ObservableObject {
     /// A file dropped on a portal: save it, then drag it into the window.
     private func receiveFile(_ reader: ByteStreamReader) async {
         let info = reader.info
-        // Only a plain file name; never "..", a hidden file, or a path.
-        var name = (info.name ?? "").components(separatedBy: "/").last?.trimmingCharacters(in: .whitespaces) ?? ""
-        while name.hasPrefix(".") { name.removeFirst() }
-        if name.isEmpty { name = "file" }
-        let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/Teleport", isDirectory: true)
+        let name = FileNames.safe(info.name)
+        let folder = FileNames.downloads.appendingPathComponent("Teleport", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let target = Self.freeURL(in: folder, for: name)
+            let target = FileNames.freeURL(in: folder, for: name)
             try await reader.readAll().write(to: target, options: .atomic)
             Log.info("received \(target.lastPathComponent) (\(info.totalLength ?? 0) bytes)")
             guard let idText = info.attributes[FileDropKeys.windowID], let windowID = UInt32(idText),
@@ -827,25 +887,13 @@ final class HostController: NSObject, ObservableObject {
         }
     }
 
-    /// "name.ext", or "name 2.ext" and so on when that is taken, like Finder does.
-    private static func freeURL(in folder: URL, for name: String) -> URL {
-        let first = folder.appendingPathComponent(name)
-        guard FileManager.default.fileExists(atPath: first.path) else { return first }
-        let base = (name as NSString).deletingPathExtension
-        let ext = (name as NSString).pathExtension
-        for n in 2 ... 999 {
-            let candidate = folder.appendingPathComponent(ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)")
-            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
-        }
-        return folder.appendingPathComponent("\(UUID().uuidString)-\(name)")
-    }
-
     private func viewerLeft() async {
         viewers = room.remoteParticipants.values.compactMap { $0.identity?.stringValue }
         // Stop capturing once the last viewer is gone.
         guard room.remoteParticipants.isEmpty else { return }
         clipboard.stop()
         updateNotificationWatch()
+        updateFileAndBadgeWatch()
         updateSound()
         for id in Array(portals.keys) { await close(id) }
     }
@@ -854,8 +902,10 @@ final class HostController: NSObject, ObservableObject {
         viewers = room.remoteParticipants.values.compactMap { $0.identity?.stringValue }
         if config.clipboardSyncEnabled { clipboard.start() }
         updateNotificationWatch()
+        updateFileAndBadgeWatch()
         updateSound()
         sendStatus(force: true)
+        badgeWatcher.current { [weak self] badges in if !badges.isEmpty { self?.sendBadges(badges) } }
     }
 }
 

@@ -50,6 +50,7 @@ final class AppModel: ObservableObject {
         viewer?.clipboardSyncEnabled = config.clipboardSyncEnabled
         viewer?.notificationsEnabled = config.notificationsEnabled
         viewer?.audioEnabled = config.audioEnabled
+        viewer?.downloadsEnabled = config.downloadsEnabled
         viewer?.microphoneEnabled = config.microphoneEnabled
     }
 
@@ -71,6 +72,7 @@ final class AppModel: ObservableObject {
             controller.clipboardSyncEnabled = config.clipboardSyncEnabled
             controller.notificationsEnabled = config.notificationsEnabled
             controller.audioEnabled = config.audioEnabled
+            controller.downloadsEnabled = config.downloadsEnabled
             controller.microphoneEnabled = config.microphoneEnabled
             controller.videoTuning = config.videoTuning
             HostController.logVideoTuning(config.videoTuning)
@@ -158,6 +160,7 @@ struct SettingsSheet: View {
     @Local private var clipboard = true
     @Local private var sounds = false
     @Local private var notifications = true
+    @Local private var downloads = true
     @Local private var audio = true
     @Local private var microphone = false
 
@@ -173,12 +176,18 @@ struct SettingsSheet: View {
                     }
                 }
                 Section("Between Macs") {
-                    Toggle("Share clipboard text", isOn: $clipboard)
+                    Toggle("Share the clipboard (text and images)", isOn: $clipboard)
                     Toggle(isOn: $notifications) {
                         Text("Notifications from shared apps")
                         Text(app.config.mode == .host
                             ? "Sends the banners of the apps you share to the connected Mac. Other apps' notifications stay here."
                             : "Shows the host's notifications from the apps it shares. Click one to open that app.")
+                    }
+                    Toggle(isOn: $downloads) {
+                        Text("Downloads from shared apps")
+                        Text(app.config.mode == .host
+                            ? "A file a shared app saves to Downloads goes to the connected Mac too. Other apps' downloads stay here. macOS asks once for access to Downloads."
+                            : "A file a shared app on the host saves to its Downloads lands in your Downloads, with a notification.")
                     }
                     Toggle("Sounds when a portal opens or a Mac pairs", isOn: $sounds)
                     TextField("Port", text: $port)
@@ -221,6 +230,7 @@ struct SettingsSheet: View {
             clipboard = app.config.clipboardSyncEnabled
             sounds = app.config.soundsEnabled
             notifications = app.config.notificationsEnabled
+            downloads = app.config.downloadsEnabled
             audio = app.config.audioEnabled
             microphone = app.config.microphoneEnabled
         }
@@ -248,6 +258,7 @@ struct SettingsSheet: View {
         config.clipboardSync = clipboard
         config.sounds = sounds
         config.notifications = notifications
+        config.downloads = downloads
         // A host's sound settings live in the Sound section of its window and change there.
         if app.config.mode == .viewer {
             config.audio = audio

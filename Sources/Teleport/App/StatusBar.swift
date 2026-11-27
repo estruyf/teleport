@@ -65,11 +65,20 @@ final class StatusBar: NSObject, NSMenuDelegate {
         }
     }
 
+    /// The icon says how the host is doing: orange while it is locked, red while the connection is lost.
     private func updateBadge() {
         let hosting = app.host?.state == .hosting
-        let connected = app.viewer?.connected ?? false
-        item.button?.appearsDisabled = !(hosting || connected) && app.config.mode != nil
-        item.button?.toolTip = hosting ? "Teleport: hosting" : connected ? "Teleport: connected" : "Teleport"
+        let viewer = app.viewer
+        let connected = viewer?.connected ?? false
+        let locked = connected && viewer?.hostLocked == true
+        let lost = viewer?.reconnecting == true
+        item.button?.appearsDisabled = !(hosting || connected || lost) && app.config.mode != nil
+        item.button?.contentTintColor = locked ? .systemOrange : lost ? .systemRed : nil
+        let name = viewer?.current?.name ?? "the host"
+        item.button?.toolTip = hosting ? "Teleport: hosting"
+            : lost ? "Teleport: connection to \(name) lost, reconnecting"
+            : locked ? "Teleport: \(name) is locked"
+            : connected ? "Teleport: connected to \(name)" : "Teleport"
     }
 
     func menuWillOpen(_: NSMenu) {
@@ -118,10 +127,11 @@ final class StatusBar: NSObject, NSMenuDelegate {
             switch viewer.state {
             case let .connected(name):
                 menu.addItem(disabled("Connected to \(name)"))
+                for line in healthLines(viewer, hostName: name) { menu.addItem(line) }
                 menu.addItem(withTitle: "Disconnect", action: #selector(disconnect), keyEquivalent: "").target = self
                 addApps(of: viewer, hostName: name, to: menu)
             case let .connecting(name):
-                menu.addItem(disabled("Connecting to \(name)…"))
+                menu.addItem(disabled(viewer.reconnecting ? "Connection to \(name) lost; reconnecting…" : "Connecting to \(name)…"))
                 menu.addItem(withTitle: "Cancel", action: #selector(disconnect), keyEquivalent: "").target = self
             default:
                 if viewer.hosts.isEmpty {
@@ -132,6 +142,14 @@ final class StatusBar: NSObject, NSMenuDelegate {
                     entry.target = self
                     entry.representedObject = host.publicKey
                     menu.addItem(entry)
+                    let reachability = viewer.reachability[host.publicKey]
+                    menu.addItem(disabled("    " + Self.describe(reachability)))
+                    if case .offline = reachability, host.macAddress != nil {
+                        let wake = NSMenuItem(title: "    Wake \(host.name)", action: #selector(wakeHost(_:)), keyEquivalent: "")
+                        wake.target = self
+                        wake.representedObject = host.publicKey
+                        menu.addItem(wake)
+                    }
                 }
             }
         }
@@ -163,6 +181,7 @@ final class StatusBar: NSObject, NSMenuDelegate {
         for remoteApp in viewer.apps {
             let entry = NSMenuItem(title: remoteApp.name, action: nil, keyEquivalent: "")
             entry.image = viewer.icons[remoteApp.bundleID].map(Self.menuIcon)
+            if let unread = viewer.badges[remoteApp.bundleID] { entry.badge = NSMenuItemBadge(string: unread) }
             if remoteApp.running {
                 let actions = NSMenu()
                 actions.addItem(action("New Window", #selector(newWindow(_:)), remoteApp))
@@ -191,6 +210,35 @@ final class StatusBar: NSObject, NSMenuDelegate {
             }
             menu.addItem(entry)
         }
+    }
+
+    /// What's worth knowing about the connected host, as menu lines; nothing when all is well.
+    private func healthLines(_ viewer: ViewerController, hostName: String) -> [NSMenuItem] {
+        var lines: [NSMenuItem] = []
+        if viewer.hostLocked {
+            lines.append(warning("\(hostName) is locked: typing and new windows won't work"))
+        }
+        if viewer.microphoneLive { lines.append(disabled("Microphone on: an app there is listening")) }
+        if let version = viewer.hostInfo?.version, version != TeleportVersion.string, version != "dev", TeleportVersion.string != "dev" {
+            lines.append(disabled("\(hostName) runs Teleport \(version), this Mac \(TeleportVersion.string)"))
+        }
+        return lines
+    }
+
+    private static func describe(_ reachability: ViewerController.Reachability?) -> String {
+        switch reachability {
+        case .online: return "Online"
+        case let .offline(lastSeen?): return "Offline · seen \(RelativeDateTimeFormatter().localizedString(for: lastSeen, relativeTo: Date()))"
+        case .offline(nil): return "Offline"
+        case nil: return "Checking…"
+        }
+    }
+
+    private func warning(_ title: String) -> NSMenuItem {
+        let entry = disabled(title)
+        entry.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(paletteColors: [.systemOrange]))
+        return entry
     }
 
     private static func menuIcon(_ image: NSImage) -> NSImage {
@@ -254,6 +302,11 @@ final class StatusBar: NSObject, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task { await app.viewer?.quit(remoteApp, force: true) }
+    }
+
+    @objc private func wakeHost(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String, let host = app.viewer?.hosts.first(where: { $0.publicKey == key }) else { return }
+        app.viewer?.wake(host)
     }
 
     @objc private func connect(_ sender: NSMenuItem) {

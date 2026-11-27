@@ -47,6 +47,21 @@ final class ViewerController: NSObject, ObservableObject {
     var clipboardSyncEnabled = true
     /// Show the host's notifications from shared apps here.
     var notificationsEnabled = true
+    /// Save files the shared apps download on the host to Downloads here.
+    var downloadsEnabled = true
+    /// Whether each paired host answers, by public key; checked every 30 s while not connected to it.
+    @Published private(set) var reachability: [String: Reachability] = [:]
+    /// What the connected host said about itself, for the menu bar.
+    @Published private(set) var hostInfo: HostInfo?
+    private var probeTask: Task<Void, Never>?
+
+    enum Reachability: Equatable {
+        case online
+        case offline(lastSeen: Date?)
+    }
+
+    /// Unread counts of the shared apps, by bundle ID, as their Dock icons show them on the host.
+    @Published private(set) var badges: [String: String] = [:]
     /// Play the shared apps' sound here.
     var audioEnabled = true {
         didSet { applyAudioVolume() }
@@ -66,6 +81,8 @@ final class ViewerController: NSObject, ObservableObject {
     var videoTuning = VideoTuning(VideoConfig())
 
     var connected: Bool { if case .connected = state { true } else { false } }
+    /// The connection dropped and the viewer is trying to get it back.
+    var reconnecting: Bool { reconnectTask != nil }
 
     /// Host windows that have a portal open here.
     /// The remote windows open in a portal here, published so the window list can mark them.
@@ -84,9 +101,15 @@ final class ViewerController: NSObject, ObservableObject {
         }
         hosts = hostStore.load()
         room.add(delegate: self)
-        clipboard.onChange = { [weak self] text in self?.sendClipboard(text) }
+        clipboard.onChange = { [weak self] content in self?.sendClipboard(content) }
         dockTiles.onActivate = { [weak self] bundleID in
             self?.focusApp(bundleID)
+        }
+        probeTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.probeHosts()
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+            }
         }
         notifications.onOpen = { [weak self] id, bundleID in
             self?.openNotification(id: id, bundleID: bundleID)
@@ -152,8 +175,11 @@ final class ViewerController: NSObject, ObservableObject {
         let result = try await HostClient.token(for: host, identity: identity)
         hostIdentity = Participant.Identity(from: result.hostIdentity)
         try await room.connect(url: host.signalURL, token: result.token, connectOptions: ConnectOptions(autoSubscribe: true))
+        try await registerStreamHandlers()
         current = host
         state = .connected(host.name)
+        reachability[host.publicKey] = .online
+        Task { await learnAbout(host) }
         if clipboardSyncEnabled { clipboard.start() }
     }
 
@@ -255,11 +281,9 @@ final class ViewerController: NSObject, ObservableObject {
 
     // MARK: - Clipboard
 
-    private func sendClipboard(_ text: String) {
-        guard connected, clipboardSyncEnabled, let data = try? JSONEncoder().encode(ClipboardMessage(text: text)),
-              data.count <= ClipboardSync.maxBytes
-        else { return }
-        Task { try? await room.localParticipant.publish(data: data, options: DataPublishOptions(topic: Topic.clipboard, reliable: true)) }
+    private func sendClipboard(_ content: ClipboardSync.Content) {
+        guard connected, clipboardSyncEnabled else { return }
+        ClipboardSync.send(content, over: room)
     }
 
     func refresh() async {
@@ -267,6 +291,7 @@ final class ViewerController: NSObject, ObservableObject {
         do {
             let reply = try await rpc(RPCMethod.apps, "{}")
             apps = try RPCReply.decode([AppInfo].self, from: reply)
+            if !badges.isEmpty { applyBadges() }
             for app in apps where icons[app.bundleID] == nil {
                 Task { await loadIcon(for: app.bundleID) }
             }
@@ -358,6 +383,122 @@ final class ViewerController: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Byte streams
+
+    /// The room keeps handlers across reconnects, and registering one twice throws.
+    private var streamHandlersRegistered = false
+
+    private func registerStreamHandlers() async throws {
+        guard !streamHandlersRegistered else { return }
+        try await room.registerByteStreamHandler(for: Topic.clipboardImage) { [weak self] reader, _ in
+            guard let self, await self.clipboardSyncEnabled else { return }
+            await self.clipboard.receiveImage(reader)
+        }
+        try await room.registerByteStreamHandler(for: Topic.downloads) { [weak self] reader, _ in
+            await self?.receiveDownload(reader)
+        }
+        streamHandlersRegistered = true
+    }
+
+    // MARK: - Host health
+
+    /// Asks each paired host we aren't connected to whether it is there. Quick: an /info call with a short timeout.
+    private func probeHosts() async {
+        for host in hosts where host.publicKey != current?.publicKey {
+            let info = try? await HostClient.info(address: host.address, port: host.port, timeout: 3)
+            if let info, info.publicKey == host.publicKey {
+                reachability[host.publicKey] = .online
+                remember(info, for: host)
+            } else {
+                let lastSeen: Date? = if case let .offline(seen) = reachability[host.publicKey] { seen } else if reachability[host.publicKey] == .online { Date() } else { nil }
+                reachability[host.publicKey] = .offline(lastSeen: lastSeen)
+            }
+        }
+    }
+
+    /// The connected host's version and wake details.
+    private func learnAbout(_ host: PairedHost) async {
+        guard let info = try? await HostClient.info(address: host.address, port: host.port, timeout: 5), info.publicKey == host.publicKey else { return }
+        hostInfo = info
+        remember(info, for: host)
+    }
+
+    /// Keeps the host's MAC address, so it can be woken later while it sleeps.
+    private func remember(_ info: HostInfo, for host: PairedHost) {
+        guard let mac = info.macAddress, let index = hosts.firstIndex(where: { $0.publicKey == host.publicKey }), hosts[index].macAddress != mac else { return }
+        hosts[index].macAddress = mac
+        try? hostStore.save(hosts)
+    }
+
+    /// Sends a Wake-on-LAN packet; only reaches a Mac on the same local network.
+    func wake(_ host: PairedHost) {
+        guard let mac = host.macAddress else { return }
+        let sent = WakeOnLAN.send(to: mac)
+        notice = sent ? "Sent a wake-up to \(host.name). It works on the same network, when it wakes for network access." : "Could not send a wake-up to \(host.name)."
+        Log.info("wake-on-lan to \(host.name): \(sent ? "sent" : "failed")")
+        Task {
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            await probeHosts()
+        }
+    }
+
+    // MARK: - Downloads
+
+    /// A file a shared app saved on the host: streamed to a temporary folder, then into Downloads
+    /// under a name that doesn't overwrite anything, flagged as downloaded like any other download.
+    private func receiveDownload(_ reader: ByteStreamReader) async {
+        guard downloadsEnabled else { return }
+        let name = FileNames.safe(reader.info.name)
+        let staging = FileManager.default.temporaryDirectory.appendingPathComponent("teleport-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: staging) }
+        do {
+            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+            let received = try await reader.writeToFile(in: staging, name: name)
+            let target = FileNames.freeURL(in: FileNames.downloads, for: name)
+            try FileManager.default.moveItem(at: received, to: target)
+            Self.markDownloaded(target)
+            let app = reader.info.attributes[DownloadKeys.app]
+            Log.info("downloads: saved \(target.lastPathComponent) from \(app ?? "the host")")
+            await notifications.showDownload(target, app: app, hostName: current?.name ?? "the host")
+        } catch {
+            Log.warn("downloads: could not save \(name): \(error)")
+            notice = "Could not save \(name) from \(current?.name ?? "the host"): \(error.localizedDescription)"
+        }
+    }
+
+    /// The quarantine flag, so Gatekeeper checks an app or script from the other Mac before it opens.
+    private static func markDownloaded(_ url: URL) {
+        let value = String(format: "0081;%08x;Teleport;", Int(Date().timeIntervalSince1970))
+        _ = value.withCString { setxattr(url.path, "com.apple.quarantine", $0, strlen($0), 0, 0) }
+    }
+
+    // MARK: - Badges
+
+    private func badgesChanged(_ new: [String: String]) {
+        guard new != badges else { return }
+        badges = new
+        applyBadges()
+    }
+
+    /// An app with unread items gets a Dock tile with its count, even without a portal open;
+    /// its tile goes again once the count is gone and no portal is open.
+    private func applyBadges() {
+        for (bundleID, label) in badges {
+            dockTiles.setBadge(bundleID: bundleID, label)
+            guard !dockTiles.hasTile(bundleID: bundleID), let app = apps.first(where: { $0.bundleID == bundleID }) else { continue }
+            Task {
+                guard let icon = await loadIcon(for: bundleID), connected, badges[bundleID] != nil else { return }
+                dockTiles.ensureTile(bundleID: bundleID, appName: app.name, icon: icon)
+            }
+        }
+        for app in apps where badges[app.bundleID] == nil {
+            dockTiles.setBadge(bundleID: app.bundleID, nil)
+            if dockTiles.hasTile(bundleID: app.bundleID), !portals.values.contains(where: { $0.info.bundleID == app.bundleID }) {
+                dockTiles.removeTile(bundleID: app.bundleID)
+            }
+        }
+    }
+
     // MARK: - Sound
 
     private func hostAudioArrived(_ track: RemoteAudioTrack) {
@@ -409,6 +550,8 @@ final class ViewerController: NSObject, ObservableObject {
 
     /// The room is gone, and its tracks with it.
     private func resetSound() {
+        badges = [:]
+        hostInfo = nil
         hostAudio = nil
         hostWantsMicrophone = false
         microphonePublication = nil
@@ -442,7 +585,7 @@ final class ViewerController: NSObject, ObservableObject {
         guard let portal = portals.removeValue(forKey: windowID) else { return }
         fireAndForget(RPCMethod.close, CloseRequest(windowID: windowID))
         let bundleID = portal.info.bundleID
-        if !portals.values.contains(where: { $0.info.bundleID == bundleID }) {
+        if !portals.values.contains(where: { $0.info.bundleID == bundleID }), badges[bundleID] == nil {
             dockTiles.removeTile(bundleID: bundleID)
         }
     }
@@ -559,6 +702,11 @@ extension ViewerController: RoomDelegate {
             Task { @MainActor in
                 guard self.clipboardSyncEnabled, let message = try? JSONDecoder().decode(ClipboardMessage.self, from: data) else { return }
                 self.clipboard.apply(message.text)
+            }
+        case Topic.badges:
+            Task { @MainActor in
+                guard let message = try? JSONDecoder().decode(AppBadges.self, from: data) else { return }
+                self.badgesChanged(message.badges)
             }
         case Topic.notifications:
             Task { @MainActor in

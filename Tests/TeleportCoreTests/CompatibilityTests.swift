@@ -57,6 +57,31 @@ import Testing
         #expect(decoded.microphoneDevice == nil)
     }
 
+    @Test func hostInfoFromAnOlderHostCantBeWoken() throws {
+        let json = #"{"name":"Office","publicKey":"ab","version":"0.2.0","port":7880}"#
+        let info = try JSONDecoder().decode(HostInfo.self, from: Data(json.utf8))
+        #expect(info.macAddress == nil)
+        #expect(info.wakesForNetwork == nil)
+    }
+
+    @Test func pairedHostsSavedBeforeWakeHaveNoAddress() throws {
+        let json = #"[{"name":"Office","address":"10.0.0.2","port":7880,"publicKey":"ab","pairedAt":"2026-11-26T10:00:00Z"}]"#
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let hosts = try decoder.decode([PairedHost].self, from: Data(json.utf8))
+        #expect(hosts.first?.macAddress == nil)
+    }
+
+    @Test func badgesRoundTrip() throws {
+        let badges = AppBadges(badges: ["com.microsoft.teams2": "3"])
+        #expect(try JSONDecoder().decode(AppBadges.self, from: JSONEncoder().encode(badges)) == badges)
+    }
+
+    @Test func configWithoutDownloadsSendsThem() throws {
+        let decoded = try JSONDecoder().decode(TeleportConfig.self, from: JSONEncoder().encode(config))
+        #expect(decoded.downloadsEnabled)
+    }
+
     @Test func adminTokenOnlyAdministersTheRoom() throws {
         let token = AccessToken.admin(config: config)
         let parts = token.split(separator: ".")

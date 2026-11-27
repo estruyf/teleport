@@ -9,7 +9,10 @@ public enum DockTileIPC {
     public static let quit = Notification.Name("ai.teleport.docktile.quit")
     /// Posted by the viewer on exit so every tile goes away with it.
     public static let quitAll = Notification.Name("ai.teleport.docktile.quit-all")
+    /// Posted by the viewer when the remote app's badge changes; `userInfo[badgeKey]` is the text, or "" for none.
+    public static let badge = Notification.Name("ai.teleport.docktile.badge")
     public static let bundleIDKey = "bundleID"
+    public static let badgeKey = "badge"
 
     public static var tilesDirectory: URL {
         TeleportConfig.directory.appendingPathComponent("dock-tiles", isDirectory: true)

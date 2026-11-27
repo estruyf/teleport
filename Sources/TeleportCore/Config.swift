@@ -32,6 +32,8 @@ public struct TeleportConfig: Codable {
     public var keepAlive: Bool?
     /// Host: send notifications from shared apps to viewers. Viewer: show them. Nil means on.
     public var notifications: Bool? = nil
+    /// Host: send files the shared apps save to Downloads. Viewer: save them here. Nil means on.
+    public var downloads: Bool? = nil
     /// Host: send the shared apps' sound to viewers. Viewer: play it. Nil means on.
     public var audio: Bool? = nil
     /// Viewer: send this Mac's microphone while a shared app on the host listens to one. Nil means off.
@@ -48,6 +50,7 @@ public struct TeleportConfig: Codable {
     public var keepAliveEnabled: Bool { keepAlive ?? false }
     public var notificationsEnabled: Bool { notifications ?? true }
     public var audioEnabled: Bool { audio ?? true }
+    public var downloadsEnabled: Bool { downloads ?? true }
     public var microphoneEnabled: Bool { microphone ?? false }
     public var videoTuning: VideoTuning { VideoTuning(video ?? VideoConfig()) }
 

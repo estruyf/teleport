@@ -16,12 +16,20 @@ public struct HostInfo: Codable {
     /// The host's clock in ms, for the viewer's latency probe to line the two clocks up.
     /// Nil from a host before 0.3.
     public var timeMs: UInt64?
-    public init(name: String, publicKey: String, version: String, port: Int, timeMs: UInt64? = nil) {
+    /// The host's Ethernet or Wi-Fi hardware address, for Wake-on-LAN. Nil from hosts before 0.3.
+    public var macAddress: String?
+    /// The host wakes for network access (`pmset womp`). Nil from hosts before 0.3.
+    public var wakesForNetwork: Bool?
+    public init(name: String, publicKey: String, version: String, port: Int, timeMs: UInt64? = nil,
+                macAddress: String? = nil, wakesForNetwork: Bool? = nil)
+    {
         self.name = name
         self.publicKey = publicKey
         self.version = version
         self.port = port
         self.timeMs = timeMs
+        self.macAddress = macAddress
+        self.wakesForNetwork = wakesForNetwork
     }
 }
 
@@ -121,6 +129,8 @@ public struct PairedHost: Codable, Identifiable, Hashable {
     public var port: Int
     public var publicKey: String
     public var pairedAt: Date
+    /// For Wake-on-LAN; learned from the host's info once connected. Nil until then.
+    public var macAddress: String?
     public var id: String { publicKey }
     public init(name: String, address: String, port: Int, publicKey: String, pairedAt: Date = Date()) {
         self.name = name
