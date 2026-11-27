@@ -111,7 +111,7 @@ The host runs a [LiveKit](https://livekit.io) server and streams each opened win
 
 ## Status
 
-Teleport is early; 0.2.0 is the latest release. Pairing, discovery, streaming, input, resize, clipboard text, Dock tiles, reconnect, the login item, remote launch and quit, notarized releases and in-app updates all work. 0.2.0 adds sound, a microphone for calls, and notifications; those were tested on one Mac, not yet with Teams across two. Not yet verified on a headless Mac. Not there yet: TLS on the signalling socket (Tailscale covers it today; see [security](docs/security.md)), stereo sound, HEVC 4:4:4 and Intel builds. The [roadmap](docs/release-checklist.md) has the full list.
+Teleport is early; 0.3.0 is the latest release. Pairing, discovery, streaming, input, resize, clipboard text, Dock tiles, reconnect, the login item, remote launch and quit, notarized releases and in-app updates all work. 0.2.0 added sound, a microphone for calls, and notifications; 0.3.0 adds clipboard images, downloads, unread counts and host health. Those were tested on one Mac, not yet with Teams across two. Not yet verified on a headless Mac. Not there yet: TLS on the signalling socket (Tailscale covers it today; see [security](docs/security.md)), stereo sound, HEVC 4:4:4 and Intel builds. The [roadmap](docs/release-checklist.md) has the full list.
 
 ## License
 

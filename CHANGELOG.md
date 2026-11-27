@@ -4,12 +4,22 @@ All notable changes to Teleport. The format follows [Keep a Changelog](https://k
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-27
+
+Screenshots, downloads and unread counts come along, and the menu bar tells you how the host is doing.
+
 ### Added
 
 - **Images on the clipboard.** Copy a screenshot on one Mac and paste it into a chat on the other, both ways, up to 25 MB.
 - **Downloads come to you.** A file a shared app saves to the host's Downloads, such as a Teams attachment, lands in your Downloads with a notification. Other apps' downloads stay on the host.
 - **Unread counts.** A shared app's Dock badge shows on its Dock icon on your Mac and in the menu bar's app list, even before you open one of its windows.
 - **Host health in the menu bar.** The icon turns orange while the host is locked and red while the connection is lost. While you're not connected, the menu shows each paired Mac as online or offline, and can wake one that sleeps on the same network.
+
+### Known limitations
+
+- The host asks once for access to its Downloads folder, and doesn't send downloads until someone answers. On a Mac without a screen, answer it through Screen Sharing; the host's checklist says when it's waiting.
+- Wake only reaches a host on the same local network, with *Wake for network access* on. Over Tailscale it can't wake a sleeping Mac.
+- These were tested with both Macs' roles on one Mac, not yet across two.
 
 ## [0.2.0] - 2026-11-27
 
@@ -54,6 +64,7 @@ The first release: use the apps on another Mac as if they were right here.
 - The signalling connection isn't encrypted on a plain LAN yet; over Tailscale the whole path is. See [security](https://github.com/estruyf/teleport/blob/main/docs/security.md).
 - No audio from remote apps yet.
 
-[Unreleased]: https://github.com/estruyf/teleport/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/estruyf/teleport/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/estruyf/teleport/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/estruyf/teleport/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/estruyf/teleport/releases/tag/v0.1.0
