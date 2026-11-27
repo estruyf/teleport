@@ -4,6 +4,22 @@ All notable changes to Teleport. The format follows [Keep a Changelog](https://k
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-27
+
+Hear the shared apps, talk in their calls, and get their notifications.
+
+### Added
+
+- **Sound.** Hear the shared apps on the viewer: Teams ringing, a video, the other side of a call. The host plays nothing itself and needs no microphone or speakers. On by default; turn it off in the host window's new Sound section or the viewer's Settings › Sound.
+- **Microphone for calls (optional).** Turn it on on the viewer, and set up a virtual audio device such as BlackHole on the host: its new Sound section checks the setup and can run the install in Terminal. The viewer then sends its microphone, with echo cancellation, only while a shared app on the host is listening to one.
+- **Notifications from shared apps.** Banners that the host's shared apps show appear on the viewer, with the app's icon. Click one to open that app where the notification points. Other apps' notifications stay on the host. On by default; turn it off on either Mac under Settings › Between Macs.
+
+### Known limitations
+
+- Sound and notifications were tested with both Macs' roles on one Mac, not yet with Teams across two Macs. The host log (`npm run logs`) shows `sound:` and `notifications:` lines if something doesn't come through.
+- Sound is mono.
+- No banner is forwarded while the app that sends it is frontmost on the host; macOS hands it to the app instead.
+
 ## [0.1.0] - 2026-11-26
 
 The first release: use the apps on another Mac as if they were right here.
@@ -31,5 +47,6 @@ The first release: use the apps on another Mac as if they were right here.
 - The signalling connection isn't encrypted on a plain LAN yet; over Tailscale the whole path is. See [security](https://github.com/estruyf/teleport/blob/main/docs/security.md).
 - No audio from remote apps yet.
 
-[Unreleased]: https://github.com/estruyf/teleport/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/estruyf/teleport/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/estruyf/teleport/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/estruyf/teleport/releases/tag/v0.1.0

@@ -36,6 +36,8 @@ Teleport fixes that. I open just the app I need, and it shows up as a normal win
 - **Find Macs by name.** Hosts on the same network (Bonjour) or your Tailscale tailnet show up by name.
 - **Remote control of apps.** Launch apps, open new windows and quit apps on the host from the viewer's window or menu bar.
 - **Clipboard and files.** Text clipboard both ways; drop a file on a portal to send it to the host (experimental).
+- **Sound, and optionally your microphone.** Hear the shared apps: Teams ringing, a video, the other side of a call. Turn on the microphone to talk in calls too.
+- **Notifications.** Banners from the shared apps on the host show up on your Mac; click one to open that app where the notification points.
 - **Stays up.** The viewer reconnects after a network blip, the host restarts its streaming server if it dies, and a login item brings the host back after a reboot.
 - **Updates itself.** Signed updates through Sparkle. A host installs them on its own while no viewer is connected.
 
@@ -108,7 +110,7 @@ The host runs a [LiveKit](https://livekit.io) server and streams each opened win
 
 ## Status
 
-Teleport is early: 0.1.0 is the first release. Pairing, discovery, streaming, input, resize, clipboard text, Dock tiles, reconnect, the login item, remote launch and quit, notarized releases and in-app updates all work. Not yet verified on a headless Mac. Not there yet: TLS on the signalling socket (Tailscale covers it today; see [security](docs/security.md)), audio, HEVC 4:4:4 and Intel builds. The [roadmap](docs/release-checklist.md) has the full list.
+Teleport is early; 0.2.0 is the latest release. Pairing, discovery, streaming, input, resize, clipboard text, Dock tiles, reconnect, the login item, remote launch and quit, notarized releases and in-app updates all work. 0.2.0 adds sound, a microphone for calls, and notifications; those were tested on one Mac, not yet with Teams across two. Not yet verified on a headless Mac. Not there yet: TLS on the signalling socket (Tailscale covers it today; see [security](docs/security.md)), stereo sound, HEVC 4:4:4 and Intel builds. The [roadmap](docs/release-checklist.md) has the full list.
 
 ## License
 
